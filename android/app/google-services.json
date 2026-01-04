@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "383028038121",
+    "project_id": "raj-mordern-app",
+    "storage_bucket": "raj-mordern-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:383028038121:android:eb772c08977255e3976378",
+        "android_client_info": {
+          "package_name": "com.rmps.apppro"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAH0x2MHLxEHRNpFEAs3qVF4a39RUKtnNI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
