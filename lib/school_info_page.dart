@@ -17,6 +17,14 @@ class _SchoolInfoPageState extends State<SchoolInfoPage> {
   Map<String, String> schoolDetails = {};
   bool isLoading = true;
   bool isDownloading = false;
+  bool get isValidQrCode {
+    if (qrCode.isEmpty) return false;
+
+    return qrCode.startsWith('http') &&
+        (qrCode.endsWith('.png') ||
+            qrCode.endsWith('.jpg') ||
+            qrCode.endsWith('.jpeg'));
+  }
 
   @override
   void initState() {
@@ -32,6 +40,8 @@ class _SchoolInfoPageState extends State<SchoolInfoPage> {
       Uri.parse('https://rmps.apppro.in/api/school'),
       headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
     );
+    debugPrint("📡 STATUS CODE => ${response.statusCode}");
+    debugPrint("📡 RAW RESPONSE => ${response.body}");
 
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
@@ -48,6 +58,10 @@ class _SchoolInfoPageState extends State<SchoolInfoPage> {
           "Contact": data["ContactNo"].toString(),
         };
         isLoading = false;
+
+        debugPrint("✅ STATE UPDATED");
+        debugPrint("➡️ schoolLogo (final) => $schoolLogo");
+        debugPrint("➡️ qrCode (final) => $qrCode");
       });
     } else {
       print("❌ School info fetch failed: ${response.statusCode}");
@@ -182,10 +196,11 @@ class _SchoolInfoPageState extends State<SchoolInfoPage> {
                       ),
 
                       // 🧾 QR Code Section
-                      if (qrCode.isNotEmpty) ...[
+                      // 🧾 QR Code Section (ONLY if valid image)
+                      if (isValidQrCode) ...[
                         const SizedBox(height: 20),
-                        Divider(),
-                        Text(
+                        const Divider(),
+                        const Text(
                           "Payment QR Code",
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
@@ -194,14 +209,20 @@ class _SchoolInfoPageState extends State<SchoolInfoPage> {
                           ),
                         ),
                         const SizedBox(height: 10),
-                        Image.network(qrCode, height: 150, width: 150),
+
+                        Image.network(
+                          qrCode,
+                          height: 150,
+                          width: 150,
+                          fit: BoxFit.contain,
+                        ),
+
                         const SizedBox(height: 12),
 
-                        // ⬇️ Download Button
                         ElevatedButton.icon(
                           onPressed: isDownloading ? null : downloadQrCode,
                           icon: isDownloading
-                              ? SizedBox(
+                              ? const SizedBox(
                                   width: 18,
                                   height: 18,
                                   child: CircularProgressIndicator(
@@ -209,21 +230,19 @@ class _SchoolInfoPageState extends State<SchoolInfoPage> {
                                     color: Colors.white,
                                   ),
                                 )
-                              : Icon(Icons.download, color: Colors.white),
-
+                              : const Icon(Icons.download, color: Colors.white),
                           label: Text(
                             isDownloading
                                 ? "Downloading..."
                                 : "Download QR Code",
-                            style: TextStyle(color: Colors.white),
+                            style: const TextStyle(color: Colors.white),
                           ),
                           style: ElevatedButton.styleFrom(
-                            textStyle: TextStyle(color: Colors.white),
                             backgroundColor: Colors.deepPurple,
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(30),
                             ),
-                            padding: EdgeInsets.symmetric(
+                            padding: const EdgeInsets.symmetric(
                               horizontal: 20,
                               vertical: 12,
                             ),

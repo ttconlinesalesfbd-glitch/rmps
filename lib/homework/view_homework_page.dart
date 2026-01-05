@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:open_file/open_file.dart';
 
 class ViewHomeworksPage extends StatelessWidget {
@@ -15,7 +14,10 @@ class ViewHomeworksPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Assigned Homeworks", style: TextStyle(color: Colors.white)),
+        title: const Text(
+          "Assigned Homeworks",
+          style: TextStyle(color: Colors.white),
+        ),
         backgroundColor: Colors.deepPurple,
         iconTheme: const IconThemeData(color: Colors.white),
       ),
@@ -42,7 +44,10 @@ class ViewHomeworksPage extends StatelessWidget {
               ),
               trailing: hw['Attachment'] != null
                   ? IconButton(
-                      icon: const Icon(Icons.download, color: Colors.deepPurple),
+                      icon: const Icon(
+                        Icons.download,
+                        color: Colors.deepPurple,
+                      ),
                       onPressed: () {
                         String fileUrl = hw['Attachment'];
                         String fileName = fileUrl.split('/').last;
@@ -72,36 +77,34 @@ class ViewHomeworksPage extends StatelessWidget {
     }
   }
 
-  Future<void> downloadFile(BuildContext context, String fileUrl, String fileName) async {
-    if (Platform.isAndroid) {
-      var status = await Permission.manageExternalStorage.request();
-      if (!status.isGranted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Storage permission is required")),
-        );
-        return;
-      }
-    }
-
+  Future<void> downloadFile(
+    BuildContext context,
+    String fileUrl,
+    String fileName,
+  ) async {
     try {
       final response = await http.get(Uri.parse(fileUrl));
+
       if (response.statusCode == 200) {
-        final dir = await getExternalStorageDirectory();
-        final file = File('${dir!.path}/$fileName');
+        // ✅ App private storage (NO permission needed)
+        final dir = await getApplicationDocumentsDirectory();
+        final filePath = '${dir.path}/$fileName';
+
+        final file = File(filePath);
         await file.writeAsBytes(response.bodyBytes);
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Downloaded to ${file.path}")),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text("File downloaded")));
 
-        await OpenFile.open(file.path);
+        await OpenFile.open(filePath);
       } else {
-        throw Exception('Download failed with status ${response.statusCode}');
+        throw Exception('Download failed (${response.statusCode})');
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Download error: $e")),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("Download error")));
     }
   }
 }

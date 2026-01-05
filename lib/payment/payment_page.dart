@@ -4,7 +4,6 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:open_file/open_file.dart';
 
 class PaymentPage extends StatefulWidget {
@@ -69,13 +68,13 @@ Future<void> downloadReceipt(dynamic paymentId) async {
     );
 
     final data = jsonDecode(response.body);
+
     if (response.statusCode == 200 && data['status'] == true) {
       final url = data['url'];
       final filename = url.split('/').last;
 
-      await Permission.storage.request();
-
-      final dir = await getApplicationDocumentsDirectory(); // safer directory
+      // ✅ App private directory (NO permission needed)
+      final dir = await getApplicationDocumentsDirectory();
       final filePath = '${dir.path}/$filename';
 
       final pdfResponse = await http.get(Uri.parse(url));
@@ -83,7 +82,7 @@ Future<void> downloadReceipt(dynamic paymentId) async {
       await file.writeAsBytes(pdfResponse.bodyBytes);
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Receipt downloaded: $filename')),
+        SnackBar(content: Text('Receipt downloaded')),
       );
 
       await OpenFile.open(filePath);
@@ -93,12 +92,13 @@ Future<void> downloadReceipt(dynamic paymentId) async {
       );
     }
   } catch (e) {
-    print("❌ Error downloading receipt: $e");
+    debugPrint("❌ Download error: $e");
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Error downloading receipt')),
     );
   }
 }
+
 
 
   @override

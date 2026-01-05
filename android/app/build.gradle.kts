@@ -17,7 +17,7 @@ android {
         applicationId = "com.rmps.apppro"
         minSdk = flutter.minSdkVersion
         targetSdk = 35
-        versionCode = 7
+        versionCode = 9
         versionName = "2.0.0"
     }
 

@@ -1,8 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:permission_handler/permission_handler.dart';
-import 'package:device_info_plus/device_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:open_file/open_file.dart';
 import 'package:raj_modern_public_school/teacher/teacher_homework_detail_page.dart';
@@ -68,8 +66,8 @@ class TeacherRecentHomeworks extends StatelessWidget {
                       leading: const Icon(Icons.book, color: Colors.deepPurple),
                       title: Text(hw['HomeworkTitle'] ?? ''),
                       subtitle: Text(
-  "Submission: ${formatDate(hw['SubmissionDate'])}",
-),
+                        "Submission: ${formatDate(hw['SubmissionDate'])}",
+                      ),
 
                       trailing: hw['Attachment'] != null
                           ? IconButton(
@@ -78,8 +76,6 @@ class TeacherRecentHomeworks extends StatelessWidget {
                                 color: Colors.deepPurple,
                               ),
                               onPressed: () async {
-                                await requestStoragePermission();
-
                                 final attachment = hw['Attachment'];
                                 final fileUrl =
                                     'https://rmps.apppro.in/$attachment';
@@ -106,55 +102,44 @@ class TeacherRecentHomeworks extends StatelessWidget {
     );
   }
 
-  Future<void> requestStoragePermission() async {
-    if (Platform.isAndroid) {
-      final androidInfo = await DeviceInfoPlugin().androidInfo;
-      final sdkInt = androidInfo.version.sdkInt;
-
-      if (sdkInt >= 33) {
-        await [
-          Permission.photos,
-          Permission.videos,
-          Permission.audio,
-        ].request();
-      } else {
-        await Permission.storage.request();
-      }
-    }
-  }
-
   Future<void> downloadFile(
     BuildContext context,
     String url,
     String fileName,
   ) async {
     try {
-      final dir = await getExternalStorageDirectory();
-      final filePath = '${dir!.path}/$fileName';
-
       final response = await http.get(Uri.parse(url));
-      final file = File(filePath);
-      await file.writeAsBytes(response.bodyBytes);
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text("📥 Downloaded to $filePath")));
+      if (response.statusCode == 200) {
+        // ✅ App private directory (Google-safe)
+        final dir = await getApplicationDocumentsDirectory();
+        final filePath = '${dir.path}/$fileName';
 
-      await OpenFile.open(filePath);
+        final file = File(filePath);
+        await file.writeAsBytes(response.bodyBytes);
+
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text("📥 File downloaded")));
+
+        await OpenFile.open(filePath);
+      } else {
+        throw Exception('Download failed');
+      }
     } catch (e) {
-      print("❌ Download failed: $e");
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text("❌ Download failed")));
     }
   }
-}
-String formatDate(String? date) {
-  if (date == null || date.isEmpty) return "";
-  try {
-    final parsedDate = DateTime.parse(date);
-    return "${parsedDate.day.toString().padLeft(2, '0')}-${parsedDate.month.toString().padLeft(2, '0')}-${parsedDate.year}";
-  } catch (_) {
-    return date;
+
+  String formatDate(String? date) {
+    if (date == null || date.isEmpty) return "";
+    try {
+      final parsedDate = DateTime.parse(date);
+      return "${parsedDate.day.toString().padLeft(2, '0')}-${parsedDate.month.toString().padLeft(2, '0')}-${parsedDate.year}";
+    } catch (_) {
+      return date;
+    }
   }
 }

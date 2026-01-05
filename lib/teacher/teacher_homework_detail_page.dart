@@ -3,8 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:device_info_plus/device_info_plus.dart';
 
 class TeacherHomeworkDetailPage extends StatelessWidget {
   final Map<String, dynamic> homework;
@@ -21,47 +19,39 @@ class TeacherHomeworkDetailPage extends StatelessWidget {
     }
   }
 
-  Future<void> requestStoragePermission() async {
-    if (Platform.isAndroid) {
-      final androidInfo = await DeviceInfoPlugin().androidInfo;
-      final sdkInt = androidInfo.version.sdkInt;
+ 
 
-      if (sdkInt >= 33) {
-        await [
-          Permission.photos,
-          Permission.videos,
-          Permission.audio,
-        ].request();
-      } else {
-        await Permission.storage.request();
-      }
-    }
-  }
+ Future<void> downloadFile(
+  BuildContext context,
+  String url,
+  String fileName,
+) async {
+  try {
+    final response = await http.get(Uri.parse(url));
 
-  Future<void> downloadFile(
-    BuildContext context,
-    String url,
-    String fileName,
-  ) async {
-    try {
-      final dir = await getExternalStorageDirectory();
-      final filePath = '${dir!.path}/$fileName';
+    if (response.statusCode == 200) {
+      // ✅ App private directory — NO permission needed
+      final dir = await getApplicationDocumentsDirectory();
+      final filePath = '${dir.path}/$fileName';
 
-      final response = await http.get(Uri.parse(url));
       final file = File(filePath);
       await file.writeAsBytes(response.bodyBytes);
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text("📥 Downloaded to $filePath")));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("📥 File downloaded")),
+      );
 
       await OpenFile.open(filePath);
-    } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("❌ Download failed")));
+    } else {
+      throw Exception('Download failed');
     }
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("❌ Download failed")),
+    );
   }
+}
+
 
   @override
   Widget build(BuildContext context) {
@@ -125,7 +115,7 @@ class TeacherHomeworkDetailPage extends StatelessWidget {
                       backgroundColor: Colors.deepPurple,
                     ),
                     onPressed: () async {
-                      await requestStoragePermission();
+                   
                       final fileUrl = 'https://rmps.apppro.in/$attachment';
                       await downloadFile(context, fileUrl, fileName!);
                     },
