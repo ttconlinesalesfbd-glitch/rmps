@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:file_picker/file_picker.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 
@@ -19,12 +19,13 @@ class _TeacherAddHomeworkPageState extends State<TeacherAddHomeworkPage> {
   List sections = [];
   int? selectedClassId;
   int? selectedSectionId;
+  File? selectedFile;
 
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
   DateTime? assignDate;
   DateTime? submissionDate;
-  File? selectedFile;
+  final ImagePicker _picker = ImagePicker();
 
   bool isLoading = false;
 
@@ -242,11 +243,15 @@ class _TeacherAddHomeworkPageState extends State<TeacherAddHomeworkPage> {
     }
   }
 
-  Future<void> pickFile() async {
-    final result = await FilePicker.platform.pickFiles();
-    if (result != null && result.files.single.path != null) {
+  Future<void> pickImage() async {
+    final XFile? image = await _picker.pickImage(
+      source: ImageSource.gallery, // OR ImageSource.camera
+      imageQuality: 80,
+    );
+
+    if (image != null) {
       setState(() {
-        selectedFile = File(result.files.single.path!);
+        selectedFile = File(image.path);
       });
     }
   }
@@ -449,8 +454,8 @@ class _TeacherAddHomeworkPageState extends State<TeacherAddHomeworkPage> {
                       selectedFile == null
                           ? ElevatedButton.icon(
                               icon: const Icon(Icons.attach_file),
-                              label: const Text("Choose File"),
-                              onPressed: pickFile,
+                              label: const Text("Choose Image"),
+                              onPressed: pickImage,
                             )
                           : Container(
                               padding: const EdgeInsets.symmetric(
