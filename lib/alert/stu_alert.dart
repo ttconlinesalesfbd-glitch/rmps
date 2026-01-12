@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
+import '../api_service.dart';
 
 class StudentAlertPage extends StatefulWidget {
   const StudentAlertPage({super.key});
@@ -21,55 +20,68 @@ class _StudentAlertPageState extends State<StudentAlertPage> {
   bool isLoading = false;
   bool isSending = false; // 🔥 NEW → Loader for Send Button
   bool selectAll = false;
-  String? token;
 
   @override
   void initState() {
     super.initState();
-    _loadTokenAndFetchStudents();
+    fetchStudents();
   }
 
-  Future<void> _loadTokenAndFetchStudents() async {
-    final prefs = await SharedPreferences.getInstance();
-    token = prefs.getString("token");
-    await fetchStudents();
+  @override
+  void dispose() {
+    searchController.dispose();
+    descriptionController.dispose();
+    super.dispose();
   }
 
   Future<void> fetchStudents() async {
-    if (token == null) return;
+    if (!mounted) return;
 
     setState(() => isLoading = true);
 
-    final url = Uri.parse(
-      "https://rmps.apppro.in/api/teacher/student/list",
-    );
-
     try {
-      final res = await http.post(
-        url,
-        headers: {
-          "Authorization": "Bearer $token",
-          "Content-Type": "application/json",
-        },
-        body: json.encode({}),
-      );
+   final res = await ApiService.post(
+  context,
+  "/teacher/student/list",
+);
+
+
+      // 🔐 AuthHelper handles 401 + logout
+      if (res == null) return;
+
+      debugPrint("📥 STUDENT LIST STATUS: ${res.statusCode}");
+      debugPrint("📥 STUDENT LIST BODY: ${res.body}");
 
       if (res.statusCode == 200) {
-        final data = json.decode(res.body);
+        final data = jsonDecode(res.body);
 
+        if (!mounted) return;
         setState(() {
-          students = data;
-          filteredStudents = data;
+          students = List<dynamic>.from(data);
+          filteredStudents = List<dynamic>.from(data);
         });
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Failed to load students")),
+        );
       }
     } catch (e) {
-      debugPrint("Error fetching students = $e");
-    }
+      debugPrint("🚨 FETCH STUDENTS ERROR: $e");
 
-    setState(() => isLoading = false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Something went wrong")));
+    } finally {
+      if (!mounted) return;
+      setState(() => isLoading = false);
+    }
   }
 
   void filterStudents(String query) {
+    if (!mounted) return;
+
     setState(() {
       filteredStudents = students
           .where(
@@ -86,7 +98,10 @@ class _StudentAlertPageState extends State<StudentAlertPage> {
   // ====================================================
   Future<void> sendAlert() async {
     final message = descriptionController.text.trim();
+
+    // 🔒 Validation
     if (message.isEmpty || selectedStudentIds.isEmpty) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text("⚠️ Please enter message and select students"),
@@ -95,44 +110,54 @@ class _StudentAlertPageState extends State<StudentAlertPage> {
       return;
     }
 
-    // Start Loader
+    // 🔄 Start loader
+    if (!mounted) return;
     setState(() => isSending = true);
 
-    // Collect tokens
-    List<String> tokens = [];
-    for (var student in students) {
-      if (selectedStudentIds.contains(student["id"].toString())) {
-        if (student["fcm_token"] != null && student["fcm_token"] != "") {
-          tokens.add(student["fcm_token"]);
+    try {
+      // 🔹 Collect FCM tokens safely
+      final List<String> tokens = [];
+
+      for (final student in students) {
+        final id = student["id"]?.toString();
+        final fcm = student["fcm_token"];
+
+        if (id != null &&
+            selectedStudentIds.contains(id) &&
+            fcm != null &&
+            fcm.toString().isNotEmpty) {
+          tokens.add(fcm.toString());
         }
       }
-    }
 
-    if (tokens.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("⚠️ No FCM token found")));
-      setState(() => isSending = false);
-      return;
-    }
+      if (tokens.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text("⚠️ No FCM token found")));
+        return;
+      }
 
-    final body = {"message": message, "tokens": tokens};
+      final body = {"message": message, "tokens": tokens};
 
-    final url = Uri.parse(
-      "https://rmps.apppro.in/api/teacher/student/alert",
-    );
+      debugPrint("📤 ALERT BODY: $body");
 
-    try {
-      final res = await http.post(
-        url,
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": "Bearer $token",
-        },
-        body: json.encode(body),
-      );
+      // 🔐 SAFE API CALL (same pattern as dashboard)
+    final res = await ApiService.post(
+  context,
+  "/teacher/student/alert",
+  body: body,
+);
+
+      // ⚠️ AuthHelper already handles 401 + logout
+      if (res == null) return;
+
+      debugPrint("📥 ALERT STATUS: ${res.statusCode}");
+      debugPrint("📥 ALERT BODY: ${res.body}");
 
       if (res.statusCode == 200) {
+        if (!mounted) return;
+
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("✅ Alert Sent Successfully")),
         );
@@ -143,16 +168,23 @@ class _StudentAlertPageState extends State<StudentAlertPage> {
           selectedStudentIds.clear();
         });
       } else {
+        if (!mounted) return;
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text("❌ Failed : ${res.body}")));
+        ).showSnackBar(SnackBar(content: Text("❌ Failed: ${res.body}")));
       }
     } catch (e) {
-      debugPrint("Error sending alert = $e");
-    }
+      debugPrint("🚨 SEND ALERT ERROR: $e");
 
-    // Stop Loader
-    setState(() => isSending = false);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Something went wrong")));
+    } finally {
+      // 🔄 Stop loader safely
+      if (!mounted) return;
+      setState(() => isSending = false);
+    }
   }
 
   @override
@@ -160,12 +192,12 @@ class _StudentAlertPageState extends State<StudentAlertPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text("Student Alert"),
-        backgroundColor: Colors.deepPurple,
+        backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
       ),
 
       body: isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: CircularProgressIndicator(color: AppColors.primary),)
           : Column(
               children: [
                 // MESSAGE BOX
@@ -205,9 +237,12 @@ class _StudentAlertPageState extends State<StudentAlertPage> {
                     Checkbox(
                       value: selectAll,
                       onChanged: (val) {
+                        if (!mounted) return;
+
                         setState(() {
                           selectAll = val ?? false;
-                          if (selectAll) {
+
+                          if (selectAll && filteredStudents.isNotEmpty) {
                             selectedStudentIds = filteredStudents
                                 .map((s) => s["id"].toString())
                                 .toSet();
@@ -264,7 +299,7 @@ class _StudentAlertPageState extends State<StudentAlertPage> {
                     width: double.infinity,
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.deepPurple,
+                        backgroundColor: AppColors.primary,
                         foregroundColor: Colors.white,
                         padding: const EdgeInsets.all(14),
                       ),

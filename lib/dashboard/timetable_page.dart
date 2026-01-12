@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:raj_modern_public_school/api_service.dart';
 
 class TimeTablePage extends StatefulWidget {
   const TimeTablePage({super.key});
@@ -19,63 +18,64 @@ class _TimeTablePageState extends State<TimeTablePage> {
     'Friday',
     'Saturday',
   ];
+
   String selectedDay = 'Monday';
   List<dynamic> periods = [];
   bool isLoading = true;
 
-  final String apiUrl = 'https://rmps.apppro.in/api/student/timetable';
-
   @override
   void initState() {
     super.initState();
-    fetchTimeTableForDay(1); // Monday by default
+    fetchTimeTableForDay(1); // Monday
   }
 
+  // ====================================================
+  // 🔐 SAFE FETCH TIMETABLE (iOS + Android)
+  // ====================================================
   Future<void> fetchTimeTableForDay(int dayCode) async {
-    setState(() {
-      isLoading = true;
-    });
+    if (!mounted) return;
 
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token') ?? '';
-    print("📡 Sending day: $dayCode, Token: $token");
+    setState(() => isLoading = true);
 
-    final response = await http.post(
-      Uri.parse(apiUrl),
-      headers: {
-        'Authorization': 'Bearer $token',
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode({'Day': dayCode}),
-    );
-    print("📥 API Response: ${response.body}");
-    if (response.statusCode == 200) {
-      final decoded = jsonDecode(response.body);
-      if (decoded is List) {
+    try {
+      debugPrint("📤 TIMETABLE REQUEST DAY: $dayCode");
+
+      final res = await ApiService.post(
+        context,
+        '/student/timetable',
+        body: {'Day': dayCode},
+      );
+
+      // AuthHelper handles 401 + logout
+      if (res == null) return;
+
+      debugPrint("📥 TIMETABLE STATUS: ${res.statusCode}");
+      debugPrint("📥 TIMETABLE BODY: ${res.body}");
+
+      if (res.statusCode == 200) {
+        final decoded = jsonDecode(res.body);
+
+        if (!mounted) return;
         setState(() {
-          periods = decoded;
-          isLoading = false;
+          periods = decoded is List ? decoded : [];
         });
       } else {
-        print("⚠️ Not a List: $decoded");
-        print("✅ Parsed ${decoded.length} periods");
-
-        setState(() {
-          periods = [];
-
-          isLoading = false;
-        });
+        if (!mounted) return;
+        setState(() => periods = []);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to load time table')),
+        );
       }
-    } else {
-      print("❌ Status ${response.statusCode}");
-      setState(() {
-        periods = [];
-        isLoading = false;
-      });
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to load time table')));
+    } catch (e) {
+      debugPrint("🚨 TIMETABLE ERROR: $e");
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Something went wrong")),
+      );
+    } finally {
+      if (!mounted) return;
+      setState(() => isLoading = false);
     }
   }
 
@@ -104,9 +104,9 @@ class _TimeTablePageState extends State<TimeTablePage> {
       appBar: AppBar(
         title: const Text("Time Table", style: TextStyle(color: Colors.white)),
         centerTitle: true,
-        iconTheme: IconThemeData(color: Colors.white),
+        iconTheme: const IconThemeData(color: Colors.white),
         elevation: 2,
-        backgroundColor: Colors.deepPurple,
+        backgroundColor: AppColors.primary,
       ),
       body: Column(
         children: [
@@ -116,7 +116,9 @@ class _TimeTablePageState extends State<TimeTablePage> {
           isLoading
               ? const Expanded(
                   child: Center(
-                    child: CircularProgressIndicator(color: Colors.deepPurple),
+                    child: CircularProgressIndicator(
+                      color: AppColors.primary,
+                    ),
                   ),
                 )
               : Expanded(
@@ -132,11 +134,11 @@ class _TimeTablePageState extends State<TimeTablePage> {
 
                             Color bgColor;
                             if (slot == "1") {
-                              bgColor = Colors.deepPurple;
+                              bgColor = AppColors.primary;
                             } else if (slot == "2") {
                               bgColor = Colors.orange;
                             } else {
-                              bgColor = Colors.deepPurple;
+                              bgColor = AppColors.primary;
                             }
 
                             return Card(
@@ -193,38 +195,40 @@ class _TimeTablePageState extends State<TimeTablePage> {
                                                 ),
                                               )
                                             : (period['Subject'] == null ||
-                                                  period['Subject']
-                                                      .toString()
-                                                      .trim()
-                                                      .isEmpty)
-                                            ? const Text(
-                                                "❌ Not Scheduled",
-                                                style: TextStyle(
-                                                  color: Colors.red,
-                                                  fontSize: 16,
-                                                  fontWeight: FontWeight.bold,
-                                                ),
-                                              )
-                                            : Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                children: [
-                                                  Text(
-                                                    "Subject: ${period['Subject']}",
-                                                    style: const TextStyle(
+                                                    period['Subject']
+                                                        .toString()
+                                                        .trim()
+                                                        .isEmpty)
+                                                ? const Text(
+                                                    "❌ Not Scheduled",
+                                                    style: TextStyle(
+                                                      color: Colors.red,
+                                                      fontSize: 16,
                                                       fontWeight:
-                                                          FontWeight.w600,
+                                                          FontWeight.bold,
                                                     ),
+                                                  )
+                                                : Column(
+                                                    crossAxisAlignment:
+                                                        CrossAxisAlignment
+                                                            .start,
+                                                    children: [
+                                                      Text(
+                                                        "Subject: ${period['Subject']}",
+                                                        style: const TextStyle(
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                        ),
+                                                      ),
+                                                      const SizedBox(height: 4),
+                                                      Text(
+                                                        "Teacher: ${period['Teacher'] ?? '-'}",
+                                                      ),
+                                                      Text(
+                                                        "Room No: ${period['RoomNo'] ?? '-'}",
+                                                      ),
+                                                    ],
                                                   ),
-                                                  const SizedBox(height: 4),
-                                                  Text(
-                                                    "Teacher: ${period['Teacher'] ?? '-'}",
-                                                  ),
-                                                  Text(
-                                                    "Room No: ${period['RoomNo'] ?? '-'}",
-                                                  ),
-                                                ],
-                                              ),
                                       ),
                                     ),
                                   ],
@@ -239,6 +243,9 @@ class _TimeTablePageState extends State<TimeTablePage> {
     );
   }
 
+  // ====================================================
+  // 📅 DAY SELECTOR (UNCHANGED)
+  // ====================================================
   Widget _buildDaySelector() {
     return SizedBox(
       height: 45,
@@ -252,18 +259,16 @@ class _TimeTablePageState extends State<TimeTablePage> {
 
           return GestureDetector(
             onTap: () {
-              setState(() {
-                selectedDay = day;
-              });
+              setState(() => selectedDay = day);
               fetchTimeTableForDay(getDayCode(day));
             },
             child: Container(
               margin: const EdgeInsets.symmetric(horizontal: 6),
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
-                color: isSelected ? Colors.deepPurple : Colors.transparent,
+                color: isSelected ? AppColors.primary : Colors.transparent,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.deepPurple, width: 1.2),
+                border: Border.all(color: AppColors.primary, width: 1.2),
               ),
               child: Row(
                 children: [
@@ -275,9 +280,8 @@ class _TimeTablePageState extends State<TimeTablePage> {
                     day,
                     style: TextStyle(
                       color: isSelected ? Colors.white : Colors.black,
-                      fontWeight: isSelected
-                          ? FontWeight.bold
-                          : FontWeight.normal,
+                      fontWeight:
+                          isSelected ? FontWeight.bold : FontWeight.normal,
                     ),
                   ),
                 ],

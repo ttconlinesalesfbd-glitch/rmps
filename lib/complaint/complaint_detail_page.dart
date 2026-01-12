@@ -1,8 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:raj_modern_public_school/api_service.dart';
 
 class ComplaintDetailPage extends StatefulWidget {
   final int complaintId;
@@ -26,44 +25,59 @@ class _ComplaintDetailPageState extends State<ComplaintDetailPage> {
   List<dynamic> history = [];
   bool isLoading = true;
 
-  final String apiUrl =
-      'https://rmps.apppro.in/api/student/complaint/history';
-
   @override
   void initState() {
     super.initState();
     fetchComplaintHistory();
   }
 
+  // ====================================================
+  // 🔐 SAFE FETCH COMPLAINT HISTORY (iOS + ANDROID)
+  // ====================================================
   Future<void> fetchComplaintHistory() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token') ?? '';
+    if (!mounted) return;
 
-    final response = await http.post(
-      Uri.parse(apiUrl),
-      headers: {
-        'Authorization': 'Bearer $token',
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode({'ComplaintId': widget.complaintId}),
-    );
+    setState(() => isLoading = true);
 
-    print("📥 Complaint History: ${response.body}");
+    try {
+      final res = await ApiService.post(
+        context,
+        '/student/complaint/history',
+        body: {"ComplaintId": widget.complaintId},
+      );
 
-    if (response.statusCode == 200) {
-      final decoded = jsonDecode(response.body);
-      if (decoded is List) {
-        setState(() {
-          history = decoded;
-          isLoading = false;
-        });
-      }
-    } else {
-      setState(() {
+      // AuthHelper already handles 401 + logout
+      if (res == null) return;
+
+      debugPrint("📥 COMPLAINT HISTORY STATUS: ${res.statusCode}");
+      debugPrint("📥 COMPLAINT HISTORY BODY: ${res.body}");
+
+      if (res.statusCode == 200) {
+        final decoded = jsonDecode(res.body);
+
+        if (!mounted) return;
+
+        if (decoded is List) {
+          setState(() {
+            history = decoded;
+          });
+        } else {
+          history = [];
+        }
+      } else {
+        if (!mounted) return;
         history = [];
-        isLoading = false;
-      });
+      }
+    } catch (e) {
+      debugPrint("🚨 HISTORY ERROR: $e");
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Something went wrong")));
+    } finally {
+      if (!mounted) return;
+      setState(() => isLoading = false);
     }
   }
 
@@ -74,15 +88,15 @@ class _ComplaintDetailPageState extends State<ComplaintDetailPage> {
   Color getStatusColor(int status) {
     return status == 1 ? Colors.green : Colors.orange;
   }
-  String formatDate(String rawDate) {
-  try {
-    final parsedDate = DateTime.parse(rawDate);
-    return DateFormat('dd-MM-yyyy').format(parsedDate);
-  } catch (e) {
-    return rawDate; 
-  }
-}
 
+  String formatDate(String rawDate) {
+    try {
+      final parsedDate = DateTime.parse(rawDate);
+      return DateFormat('dd-MM-yyyy').format(parsedDate);
+    } catch (_) {
+      return rawDate;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -92,19 +106,19 @@ class _ComplaintDetailPageState extends State<ComplaintDetailPage> {
           "Complaint Details",
           style: TextStyle(color: Colors.white),
         ),
-        backgroundColor: Colors.deepPurple,
-        leading: BackButton(color: Colors.white),
+        backgroundColor: AppColors.primary,
+        leading: const BackButton(color: Colors.white),
       ),
       body: isLoading
           ? const Center(
-              child: CircularProgressIndicator(color: Colors.deepPurple),
+              child: CircularProgressIndicator(color: AppColors.primary),
             )
           : SingleChildScrollView(
               padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 🔷 Original Complaint Card
+                  // 🔷 Original Complaint
                   Card(
                     elevation: 4,
                     shape: RoundedRectangleBorder(
@@ -119,11 +133,15 @@ class _ComplaintDetailPageState extends State<ComplaintDetailPage> {
                             children: [
                               const Icon(
                                 Icons.date_range,
-                                color: Colors.deepPurple,
+                                color: AppColors.primary,
                               ),
                               const SizedBox(width: 8),
-                              Text(formatDate(widget.date), style: const TextStyle(fontWeight: FontWeight.bold)),
-
+                              Text(
+                                formatDate(widget.date),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
                               const Spacer(),
                               Container(
                                 padding: const EdgeInsets.symmetric(
@@ -160,7 +178,7 @@ class _ComplaintDetailPageState extends State<ComplaintDetailPage> {
                   ),
                   const SizedBox(height: 20),
 
-                  // 🧾 History Section
+                  // 🧾 History
                   const Text(
                     "Complaint History",
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
@@ -189,12 +207,11 @@ class _ComplaintDetailPageState extends State<ComplaintDetailPage> {
                                   const Icon(
                                     Icons.timeline,
                                     size: 18,
-                                    color: Colors.deepPurple,
+                                    color: AppColors.primary,
                                   ),
                                   const SizedBox(width: 6),
                                   Text(
                                     formatDate(item['Date'] ?? ''),
-
                                     style: const TextStyle(
                                       fontWeight: FontWeight.bold,
                                     ),

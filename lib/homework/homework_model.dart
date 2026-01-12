@@ -1,54 +1,85 @@
-import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'package:intl/intl.dart'; // Add this package
-import 'package:path_provider/path_provider.dart';
 import 'dart:io';
-// import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter/material.dart';
+import 'package:dio/dio.dart';
+import 'package:intl/intl.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:open_file/open_file.dart';
+import 'package:raj_modern_public_school/api_service.dart';
 import 'package:raj_modern_public_school/homework/homework_detail_page.dart';
 import 'package:raj_modern_public_school/homework/homework_page.dart';
 
+bool _isDownloading = false; // 🔒 download lock (logic only)
 
+// ====================================================
+// 📅 DATE FORMAT (SAFE)
+// ====================================================
 String formatDate(String? inputDate) {
   if (inputDate == null || inputDate.isEmpty) return '';
   try {
-    final date = DateTime.parse(inputDate); 
-    return DateFormat('dd-MM-yyyy').format(date);
-  } catch (e) {
-    return inputDate; 
+    return DateFormat('dd-MM-yyyy').format(DateTime.parse(inputDate));
+  } catch (_) {
+    return inputDate;
   }
 }
 
+// ====================================================
+// 📥 SAFE FILE DOWNLOAD (iOS + Android)
+// ====================================================
 Future<void> downloadFile(BuildContext context, String filePath) async {
-  try {
-    final fullUrl = filePath.startsWith('http')
-        ? filePath
-        : 'https://rmps.apppro.in/$filePath';
+  if (_isDownloading) return;
+  _isDownloading = true;
 
-    final response = await http.get(Uri.parse(fullUrl));
-    if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
-      throw Exception("Failed to download file.");
+  // ✅ URL now comes from ApiService
+  final fullUrl = filePath.startsWith('http')
+      ? filePath
+      : ApiService.homeworkAttachment(filePath);
+
+  try {
+    final fileName = fullUrl.split('/').last;
+    final dio = Dio();
+    late String savePath;
+
+    // ================= ANDROID =================
+    if (Platform.isAndroid) {
+      final downloadsDir = Directory('/storage/emulated/0/Download');
+      savePath = '${downloadsDir.path}/$fileName';
+
+      await dio.download(fullUrl, savePath);
+
+      // ✅ Preview open
+      await OpenFile.open(savePath);
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("📥 Downloaded & Preview opened")),
+        );
+      }
     }
 
-    
-    final dir = await getApplicationDocumentsDirectory();
-    final fileName = filePath.split('/').last;
-    final file = File('${dir.path}/$fileName');
+    // ================= iOS =================
+    if (Platform.isIOS) {
+      final dir = await getApplicationDocumentsDirectory();
+      savePath = '${dir.path}/$fileName';
 
-    await file.writeAsBytes(response.bodyBytes, flush: true);
+      await dio.download(fullUrl, savePath);
 
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text("Downloaded to ${file.path}")));
-
-    await OpenFile.open(file.path);
+      // ✅ Preview open
+      await OpenFile.open(savePath);
+    }
   } catch (e) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text("Download error: $e")));
+    if (context.mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("❌ Download failed")));
+    }
+  } finally {
+    _isDownloading = false;
   }
 }
 
+// ====================================================
+// 📝 RECENT HOMEWORKS WIDGET (UI UNCHANGED)
+// ====================================================
 Widget buildRecentHomeworks(
   BuildContext context,
   List<Map<String, dynamic>> homeworks,
@@ -56,7 +87,7 @@ Widget buildRecentHomeworks(
   final limitedHomeworks = homeworks.take(3).toList();
 
   return Container(
-    padding: EdgeInsets.all(8),
+    padding: const EdgeInsets.all(8),
     decoration: BoxDecoration(
       color: Colors.white,
       borderRadius: BorderRadius.circular(16),
@@ -64,7 +95,7 @@ Widget buildRecentHomeworks(
         BoxShadow(
           color: Colors.grey.withOpacity(0.2),
           blurRadius: 6,
-          offset: Offset(0, 3),
+          offset: const Offset(0, 3),
         ),
       ],
     ),
@@ -74,33 +105,37 @@ Widget buildRecentHomeworks(
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(
+            const Text(
               '📝 Recent Homeworks',
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
-                color: Colors.deepPurple,
+                color: AppColors.primary,
               ),
             ),
             TextButton(
               onPressed: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => HomeworkPage()),
+                  MaterialPageRoute(builder: (_) => const HomeworkPage()),
                 );
               },
-              child: Text("View All"),
+              child: const Text(
+                "View All",
+                style: TextStyle(color: AppColors.primary),
+              ),
             ),
           ],
         ),
         limitedHomeworks.isEmpty
-            ? Text("No homeworks available.")
+            ? const Text("No homeworks available.")
             : ListView.builder(
                 shrinkWrap: true,
-                physics: NeverScrollableScrollPhysics(),
+                physics: const NeverScrollableScrollPhysics(),
                 itemCount: limitedHomeworks.length,
                 itemBuilder: (context, index) {
                   final hw = limitedHomeworks[index];
+
                   return ListTile(
                     onTap: () {
                       Navigator.push(
@@ -110,32 +145,26 @@ Widget buildRecentHomeworks(
                         ),
                       );
                     },
-                    leading: Icon(Icons.book, color: Colors.deepPurple),
+                    leading: const Icon(Icons.book, color: AppColors.primary),
                     title: Text(
                       hw['HomeworkTitle'] ?? '',
-                      style: TextStyle(fontSize: 14),
+                      style: const TextStyle(fontSize: 14),
                     ),
                     subtitle: Text(
                       'Submission: ${formatDate(hw['SubmissionDate'])}',
-                      style: TextStyle(fontSize: 12),
+                      style: const TextStyle(fontSize: 12),
                     ),
                     trailing: hw['Attachment'] != null
                         ? IconButton(
-                            icon: Icon(
+                            icon: const Icon(
                               Icons.download,
-                              color: Colors.deepPurple,
+                              color: AppColors.primary,
                             ),
                             onPressed: () {
-                              String fileUrl = hw['Attachment'];
-
-                              if (!fileUrl.startsWith('http')) {
-                                fileUrl = 'https://rmps.apppro.in/$fileUrl';
-                              }
-
-                              downloadFile(context, fileUrl);
+                              downloadFile(context, hw['Attachment']);
                             },
                           )
-                        : SizedBox.shrink(),
+                        : const SizedBox.shrink(),
                   );
                 },
               ),

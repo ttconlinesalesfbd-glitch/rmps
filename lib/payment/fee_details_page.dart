@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:raj_modern_public_school/api_service.dart';
 
 class FeeDetailsPage extends StatefulWidget {
   const FeeDetailsPage({super.key});
@@ -11,7 +10,7 @@ class FeeDetailsPage extends StatefulWidget {
 }
 
 class _FeeDetailsPageState extends State<FeeDetailsPage> {
-  final String apiUrl = 'https://rmps.apppro.in/api/student/fee';
+  
 
   final List<String> months = [
     'April',
@@ -53,36 +52,50 @@ class _FeeDetailsPageState extends State<FeeDetailsPage> {
   }
 
   Future<void> fetchFeeData(String monthKey) async {
+    if (!mounted) return;
+
     setState(() => isLoading = true);
 
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token') ?? '';
+    try {
+      final response = await ApiService.post(
+        context,
+       "/student/fee",
+        body: {'Month': monthKey},
+      );
 
-    final response = await http.post(
-      Uri.parse(apiUrl),
-      headers: {
-        'Authorization': 'Bearer $token',
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode({'Month': monthKey}),
-    );
+      // Token expired → AuthHelper already logout kara dega
+      if (response == null) return;
 
-    print("📥 Fee API Response (${monthKey}): ${response.body}");
+      if (!mounted) return;
 
-    if (response.statusCode == 200) {
-      setState(() {
-        feeData = jsonDecode(response.body);
-        isLoading = false;
-      });
-    } else {
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+
+        setState(() {
+          feeData = decoded is List ? decoded : [];
+          isLoading = false;
+        });
+      } else {
+        setState(() {
+          feeData = [];
+          isLoading = false;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Failed to fetch fee details")),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+
       setState(() {
         feeData = [];
         isLoading = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Failed to fetch fee details")),
-      );
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Network error")));
     }
   }
 
@@ -91,7 +104,7 @@ class _FeeDetailsPageState extends State<FeeDetailsPage> {
     return Scaffold(
       // backgroundColor: const Color(0xfff7f2f9),
       appBar: AppBar(
-        backgroundColor: Colors.deepPurple,
+        backgroundColor: AppColors.primary,
         title: const Text("Fee Details", style: TextStyle(color: Colors.white)),
         centerTitle: true,
         iconTheme: IconThemeData(color: Colors.white),
@@ -113,7 +126,7 @@ class _FeeDetailsPageState extends State<FeeDetailsPage> {
                     label: Text(months[index]),
                     selected: isSelected,
                     checkmarkColor: Colors.white,
-                    selectedColor: Colors.deepPurple,
+                    selectedColor: AppColors.primary,
 
                     labelStyle: TextStyle(
                       color: isSelected ? Colors.white : Colors.black,
@@ -131,7 +144,7 @@ class _FeeDetailsPageState extends State<FeeDetailsPage> {
           Expanded(
             child: isLoading
                 ? const Center(
-                    child: CircularProgressIndicator(color: Colors.deepPurple),
+                    child: CircularProgressIndicator(color: AppColors.primary),
                   )
                 : feeData.isEmpty
                 ? const Center(child: Text("No fee records for this month"))
@@ -148,7 +161,7 @@ class _FeeDetailsPageState extends State<FeeDetailsPage> {
                         child: ListTile(
                           leading: const Icon(
                             Icons.credit_card,
-                            color: Colors.deepPurple,
+                            color: AppColors.primary,
                           ),
                           title: Text("₹${record['Fee']}"),
                           subtitle: Text("Mode: ${record['FeeName']}"),

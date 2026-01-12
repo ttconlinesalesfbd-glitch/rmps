@@ -1,8 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:raj_modern_public_school/api_service.dart';
 
 class MarkAttendancePage extends StatefulWidget {
   const MarkAttendancePage({super.key});
@@ -14,59 +13,147 @@ class MarkAttendancePage extends StatefulWidget {
 class _MarkAttendancePageState extends State<MarkAttendancePage> {
   DateTime selectedDate = DateTime.now();
   TextEditingController searchController = TextEditingController();
-  String selectedCommonStatus = " ";
+
+  String selectedCommonStatus = "";
   List<Map<String, dynamic>> students = [];
   List<Map<String, dynamic>> filteredStudents = [];
+
   bool isLoading = false;
   bool isSubmitting = false;
 
   @override
   void initState() {
     super.initState();
-    checkAndLoadTodayAttendance();
+    fetchStudents();
   }
 
+  @override
+  void dispose() {
+    searchController.dispose();
+    super.dispose();
+  }
+
+  // ====================================================
+  // 🔐 SAFE FETCH STUDENTS (iOS + Android)
+  // ====================================================
+  Future<void> fetchStudents() async {
+    if (!mounted) return;
+
+    setState(() => isLoading = true);
+
+    try {
+      final res = await ApiService.post(
+        context,
+        "/teacher/std_attendance",
+        body: {'Date': DateFormat('yyyy-MM-dd').format(selectedDate)},
+      );
+
+      // AuthHelper already handles 401 + logout
+      if (res == null) return;
+
+      debugPrint("📥 ATTENDANCE STATUS: ${res.statusCode}");
+      debugPrint("📥 ATTENDANCE BODY: ${res.body}");
+
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body);
+
+        final List<Map<String, dynamic>> list = List<Map<String, dynamic>>.from(
+          data,
+        );
+
+        for (final student in list) {
+          if (student['Status'] == 'not_marked') {
+            student['Status'] = null;
+          }
+        }
+
+        if (!mounted) return;
+        setState(() {
+          students = list;
+          filteredStudents = List.from(list);
+          selectedCommonStatus = "";
+        });
+      } else {
+        if (!mounted) return;
+        setState(() {
+          students.clear();
+          filteredStudents.clear();
+        });
+      }
+    } catch (e) {
+      debugPrint("🚨 FETCH ATTENDANCE ERROR: $e");
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Something went wrong")));
+    } finally {
+      if (!mounted) return;
+      setState(() => isLoading = false);
+    }
+  }
+
+  // ====================================================
+  // 🔎 SEARCH
+  // ====================================================
   void filterSearch(String query) {
+    if (!mounted) return;
+
     setState(() {
       filteredStudents = students
           .where(
             (s) =>
-                s['StudentName'].toLowerCase().contains(query.toLowerCase()) ||
+                s['StudentName'].toString().toLowerCase().contains(
+                  query.toLowerCase(),
+                ) ||
                 s['RollNo'].toString().contains(query),
           )
           .toList();
     });
   }
 
-  void pickDate() async {
-    final DateTime? picked = await showDatePicker(
+  // ====================================================
+  // 📅 DATE PICKER
+  // ====================================================
+  Future<void> pickDate() async {
+    final picked = await showDatePicker(
       context: context,
       initialDate: selectedDate,
       firstDate: DateTime(2023),
       lastDate: DateTime.now(),
     );
+
     if (picked != null) {
-      setState(() {
-        selectedDate = picked;
-      });
-      await fetchStudents();
+      setState(() => selectedDate = picked);
+      fetchStudents();
     }
   }
 
+  // ====================================================
+  // 🟢 MARK ALL
+  // ====================================================
   void markAll(String status) {
+    if (!mounted) return;
+
     setState(() {
       selectedCommonStatus = status;
-      for (var student in students) {
-        student['Status'] = status;
+      for (final s in students) {
+        s['Status'] = status;
       }
       filterSearch(searchController.text);
     });
   }
 
+  // ====================================================
+  // 👤 MARK SINGLE
+  // ====================================================
   void markSingle(int index, String status) {
+    if (!mounted) return;
+
+    final id = filteredStudents[index]['id'];
+
     setState(() {
       filteredStudents[index]['Status'] = status;
-      final id = filteredStudents[index]['id'];
       final idx = students.indexWhere((s) => s['id'] == id);
       if (idx != -1) {
         students[idx]['Status'] = status;
@@ -74,111 +161,60 @@ class _MarkAttendancePageState extends State<MarkAttendancePage> {
     });
   }
 
-  Future<void> fetchStudents() async {
-    setState(() => isLoading = true);
-
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token') ?? "";
-
-    final response = await http.post(
-      Uri.parse('https://rmps.apppro.in/api/teacher/std_attendance'),
-      headers: {'Authorization': 'Bearer $token'},
-      body: {'Date': DateFormat('yyyy-MM-dd').format(selectedDate)},
-    );
-
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
-
-      students = List<Map<String, dynamic>>.from(data);
-
-      for (var student in students) {
-        if (student['Status'] == 'not_marked') {
-          student['Status'] = null; // ✅ No status selected for not_marked
-        }
-      }
-
-      selectedCommonStatus = ""; // ✅ No common selection by default
-
-      filteredStudents = List.from(students);
-    } else {
-      students = [];
-      filteredStudents = [];
-    }
-
-    setState(() => isLoading = false);
-  }
-
-  Future<void> checkAndLoadTodayAttendance() async {
-    setState(() => isLoading = true);
-
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token') ?? "";
-
-    final response = await http.post(
-      Uri.parse('https://rmps.apppro.in/api/teacher/std_attendance'),
-      headers: {'Authorization': 'Bearer $token'},
-      body: {'Date': DateFormat('yyyy-MM-dd').format(selectedDate)},
-    );
-
-    if (response.statusCode == 200) {
-      final data = json.decode(response.body);
-
-      if (data.isNotEmpty) {
-        students = List<Map<String, dynamic>>.from(data);
-        filteredStudents = List.from(students);
-      } else {
-        students = [];
-        filteredStudents = [];
-      }
-    } else {
-      students = [];
-      filteredStudents = [];
-    }
-
-    setState(() => isLoading = false);
-  }
-
+  // ====================================================
+  // 🚀 SUBMIT ATTENDANCE (SAFE)
+  // ====================================================
   Future<void> submitAttendance() async {
+    if (!mounted) return;
+
     setState(() => isSubmitting = true);
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token') ?? "";
 
-    final payload = {
-      "AttendanceDate": DateFormat('yyyy-MM-dd').format(selectedDate),
-      "Attendance": students
-          .map(
-            (student) => {
-              "StudentId": student['id'],
-              "Status": student['Status'],
-            },
-          )
-          .toList(),
-    };
+    try {
+      final payload = {
+        "AttendanceDate": DateFormat('yyyy-MM-dd').format(selectedDate),
+        "Attendance": students
+            .map((s) => {"StudentId": s['id'], "Status": s['Status']})
+            .toList(),
+      };
 
-    final response = await http.post(
-      Uri.parse('https://rmps.apppro.in/api/teacher/std_attendance/store'),
-      headers: {
-        'Authorization': 'Bearer $token',
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode(payload),
-    );
-    print('submitAttendance 🤔🤔response: ${response.body}');
-    // SnackBar
-    setState(() => isSubmitting = false);
+      debugPrint("📤 SUBMIT PAYLOAD: $payload");
 
-    final result = jsonDecode(response.body);
-    if (result['status']) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(result['message'] ?? 'Attendance submitted')),
+      final res = await ApiService.post(
+        context,
+        "/teacher/std_attendance/store",
+        body: payload,
       );
-    } else {
+
+      if (res == null) return;
+
+      debugPrint("📥 SUBMIT STATUS: ${res.statusCode}");
+      debugPrint("📥 SUBMIT BODY: ${res.body}");
+
+      final result = jsonDecode(res.body);
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result['message'] ?? 'Attendance updated successfully'),
+        ),
+      );
+    } catch (e) {
+      debugPrint("🚨 SUBMIT ERROR: $e");
+
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text("Submission failed")));
+    } finally {
+      if (!mounted) return;
+      setState(() => isSubmitting = false);
     }
   }
 
+  // ====================================================
+  // 🎨 UI HELPERS (UNCHANGED)
+  // ====================================================
   Color getColor(String status) {
     switch (status) {
       case "A":
@@ -191,24 +227,22 @@ class _MarkAttendancePageState extends State<MarkAttendancePage> {
         return Colors.grey;
       case "HF":
         return Colors.blue;
-
       default:
         return Colors.black;
     }
   }
 
   Widget buildCircleButton(String label, String status) {
-    bool isSelected = selectedCommonStatus == status;
+    final isSelected = selectedCommonStatus == status;
     return GestureDetector(
       onTap: () => markAll(status),
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 6),
-        decoration: BoxDecoration(
-          shape: BoxShape.rectangle,
-          borderRadius: BorderRadius.circular(10),
-          color: isSelected ? getColor(status) : Colors.grey.shade300,
-        ),
         padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: isSelected ? getColor(status) : Colors.grey.shade300,
+          borderRadius: BorderRadius.circular(10),
+        ),
         child: Text(
           label,
           style: TextStyle(
@@ -251,7 +285,7 @@ class _MarkAttendancePageState extends State<MarkAttendancePage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text("Mark Attendance"),
-        backgroundColor: Colors.deepPurple,
+        backgroundColor: AppColors.primary,
         iconTheme: const IconThemeData(color: Colors.white),
         foregroundColor: Colors.white,
       ),
@@ -261,13 +295,13 @@ class _MarkAttendancePageState extends State<MarkAttendancePage> {
             padding: const EdgeInsets.all(8.0),
             child: Row(
               children: [
-                const Icon(Icons.calendar_today, color: Colors.deepPurple),
+                const Icon(Icons.calendar_today, color: AppColors.primary),
                 const SizedBox(width: 10),
                 Text("Date: ${DateFormat('dd-MM-yyyy').format(selectedDate)}"),
                 const Spacer(),
                 ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.deepPurple,
+                    backgroundColor: AppColors.primary,
                   ),
                   onPressed: pickDate,
                   icon: const Icon(Icons.edit_calendar, color: Colors.white),
@@ -286,17 +320,17 @@ class _MarkAttendancePageState extends State<MarkAttendancePage> {
               controller: searchController,
               decoration: InputDecoration(
                 hintText: "Search student...",
-                prefixIcon: const Icon(Icons.search, color: Colors.deepPurple),
+                prefixIcon: const Icon(Icons.search, color: AppColors.primary),
                 filled: true,
-                fillColor: Colors.deepPurple.shade50,
+                fillColor: AppColors.primary.shade50,
                 enabledBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(25),
-                  borderSide: const BorderSide(color: Colors.deepPurple),
+                  borderSide: const BorderSide(color: AppColors.primary),
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(25),
                   borderSide: const BorderSide(
-                    color: Colors.deepPurple,
+                    color: AppColors.primary,
                     width: 2,
                   ),
                 ),
@@ -320,7 +354,7 @@ class _MarkAttendancePageState extends State<MarkAttendancePage> {
               ),
             ),
 
-          if (isLoading) const Center(child: CircularProgressIndicator()),
+          if (isLoading) const Center(child: CircularProgressIndicator(color: AppColors.primary),),
           if (!isLoading && students.isNotEmpty)
             Expanded(
               child: ListView.builder(
@@ -435,10 +469,10 @@ class _MarkAttendancePageState extends State<MarkAttendancePage> {
               child: SizedBox(
                 width: double.infinity,
                 child: isSubmitting
-                    ? const Center(child: CircularProgressIndicator())
+                    ? const Center(child: CircularProgressIndicator(color: AppColors.primary),)
                     : ElevatedButton(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.deepPurple,
+                          backgroundColor: AppColors.primary,
                           padding: const EdgeInsets.symmetric(vertical: 14),
                         ),
                         onPressed: () async {

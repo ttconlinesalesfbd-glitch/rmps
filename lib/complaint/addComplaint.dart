@@ -1,7 +1,6 @@
-import 'dart:convert';
+
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:raj_modern_public_school/api_service.dart';
 
 class AddComplaint extends StatefulWidget {
   const AddComplaint({super.key});
@@ -14,44 +13,80 @@ class _AddComplaintPageState extends State<AddComplaint> {
   final TextEditingController _descriptionController = TextEditingController();
   bool isSubmitting = false;
 
+  // ====================================================
+  // 🚀 SUBMIT COMPLAINT (SAFE FOR iOS + ANDROID)
+  // ====================================================
   Future<void> submitComplaint() async {
-    if (_descriptionController.text.trim().isEmpty) {
+    final description = _descriptionController.text.trim();
+
+    if (description.isEmpty) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please enter a complaint description")),
+        const SnackBar(
+          content: Text("Please enter a complaint description"),
+        ),
       );
       return;
     }
 
+    if (!mounted) return;
     setState(() => isSubmitting = true);
 
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token') ?? '';
+    try {
+      debugPrint("📤 COMPLAINT BODY: $description");
 
-    final response = await http.post(
-      Uri.parse("https://rmps.apppro.in/api/student/complaint/store"),
-      headers: {
-        'Authorization': 'Bearer $token',
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode({'Description': _descriptionController.text.trim()}),
-    );
-    // print("📤 Sent: $description");
-    print("📥 Response Status: ${response.statusCode}");
-    print("📥 Response Body: ${response.body}");
-
-    setState(() => isSubmitting = false);
-
-    if (response.statusCode == 200) {
-      Navigator.pop(context); // Go back to complaints list
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Complaint submitted successfully")),
+      final res = await ApiService.post(
+        context,
+        "/student/complaint/store",
+        body: {
+          "Description": description,
+        },
       );
-    } else {
+
+      // AuthHelper already handles 401 + logout
+      if (res == null) return;
+
+      debugPrint("📥 COMPLAINT STATUS: ${res.statusCode}");
+      debugPrint("📥 COMPLAINT BODY: ${res.body}");
+
+      if (!mounted) return;
+
+      if (res.statusCode == 200) {
+        _descriptionController.clear();
+
+        Navigator.pop(context); // back to list
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Complaint submitted successfully"),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Failed to submit complaint"),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint("🚨 COMPLAINT ERROR: $e");
+
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Failed to submit complaint")),
+        const SnackBar(
+          content: Text("Something went wrong"),
+        ),
       );
+    } finally {
+      if (!mounted) return;
+      setState(() => isSubmitting = false);
     }
+  }
+
+  @override
+  void dispose() {
+    _descriptionController.dispose();
+    super.dispose();
   }
 
   @override
@@ -62,7 +97,7 @@ class _AddComplaintPageState extends State<AddComplaint> {
           "Register Complaint",
           style: TextStyle(color: Colors.white),
         ),
-        backgroundColor: Colors.deepPurple,
+        backgroundColor: AppColors.primary,
         leading: const BackButton(color: Colors.white),
       ),
       body: Padding(
@@ -88,7 +123,7 @@ class _AddComplaintPageState extends State<AddComplaint> {
                 style: TextStyle(color: Colors.white),
               ),
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.deepPurple,
+                backgroundColor: AppColors.primary,
                 padding: const EdgeInsets.symmetric(
                   horizontal: 24,
                   vertical: 12,

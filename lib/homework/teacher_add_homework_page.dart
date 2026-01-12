@@ -3,8 +3,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
+import 'package:raj_modern_public_school/api_service.dart';
 
 class TeacherAddHomeworkPage extends StatefulWidget {
   final Map<String, dynamic>? homeworkToEdit;
@@ -19,258 +19,216 @@ class _TeacherAddHomeworkPageState extends State<TeacherAddHomeworkPage> {
   List sections = [];
   int? selectedClassId;
   int? selectedSectionId;
-  File? selectedFile;
 
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
   DateTime? assignDate;
   DateTime? submissionDate;
-  final ImagePicker _picker = ImagePicker();
-
+  File? selectedFile;
+final ImagePicker _picker = ImagePicker();
   bool isLoading = false;
+  bool _isSubmitting = false; // 🔒 prevent double submit
 
   @override
   void initState() {
     super.initState();
+    assignDate = DateTime.now();
+    submissionDate = DateTime.now();
 
-    final today = DateTime.now();
-    assignDate = today;
-    submissionDate = today;
     if (widget.homeworkToEdit != null) {
-      // Homework details fetch karne se pehle classes aur sections ko await karein
-      _loadEditData();
+      _loadEditFlow();
     } else {
-      // Naya homework add karne ke liye
       fetchClasses();
     }
   }
 
-  Future<void> _loadEditData() async {
+  // ============================
+  // 🔄 EDIT MODE SEQUENTIAL LOAD
+  // ============================
+  Future<void> _loadEditFlow() async {
     setState(() => isLoading = true);
     await fetchClasses();
     await fetchHomeworkDetails(widget.homeworkToEdit!['id']);
-    setState(() => isLoading = false);
+    if (mounted) setState(() => isLoading = false);
   }
 
-  // --- Utility Functions ---
+  // ============================
+  // 📚 FETCH CLASSES
+  // ============================
+ Future<void> fetchClasses() async {
+  final res = await ApiService.post(context, "/get_class");
+  if (res == null) return;
 
-  Future<void> fetchClassesAndSections() async {
-    setState(() => isLoading = true);
-    await fetchClasses();
-    if (selectedClassId != null) {
-      await fetchSections(selectedClassId!);
-    }
-    setState(() => isLoading = false);
+  if (res.statusCode == 200 && mounted) {
+    setState(() {
+      classes = jsonDecode(res.body);
+    });
+  }
+}
+
+  // ============================
+  // 📘 FETCH SECTIONS
+  // ============================
+ Future<void> fetchSections(int classId) async {
+  final res = await ApiService.post(
+    context,
+    "/get_section",
+    body: {'ClassId': classId},
+  );
+
+  if (res == null) return;
+
+  if (res.statusCode == 200 && mounted) {
+    setState(() {
+      sections = jsonDecode(res.body);
+      selectedSectionId = null;
+    });
+  }
+}
+
+
+  // ============================
+  // ✏️ FETCH HOMEWORK DETAILS
+  // ============================
+ Future<void> fetchHomeworkDetails(int homeworkId) async {
+  final res = await ApiService.post(
+    context,
+    "/teacher/homework/edit",
+    body: {'HomeworkId': homeworkId},
+  );
+
+  if (res == null || res.statusCode != 200) return;
+
+  final data = jsonDecode(res.body);
+
+  if (!mounted) return;
+
+  _titleController.text = data['HomeworkTitle'] ?? '';
+  _descriptionController.text = data['Remark'] ?? '';
+  assignDate = DateTime.tryParse(data['WorkDate'] ?? '');
+  submissionDate = DateTime.tryParse(data['SubmissionDate'] ?? '');
+
+  selectedClassId = int.tryParse(data['Class'] ?? '');
+  if (selectedClassId != null) {
+    await fetchSections(selectedClassId!);
   }
 
-  Future<void> fetchClasses() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token') ?? '';
+  selectedSectionId = int.tryParse(data['Section'] ?? '');
+  setState(() {});
+}
 
-    final response = await http.post(
-      Uri.parse('https://rmps.apppro.in/api/get_class'),
-      headers: {
-        'Authorization': 'Bearer $token',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
+  // ============================
+  // 📤 SUBMIT / UPDATE HOMEWORK
+  // ============================
+ Future<void> submitHomework() async {
+  if (_isSubmitting) return;
+
+  if (selectedClassId == null ||
+      selectedSectionId == null ||
+      assignDate == null ||
+      submissionDate == null ||
+      _titleController.text.trim().isEmpty ||
+      _descriptionController.text.trim().isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Please fill all fields")),
     );
-
-    if (response.statusCode == 200) {
-      setState(() {
-        classes = jsonDecode(response.body);
-      });
-    } else {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Failed to fetch classes")),
-        );
-      }
-    }
+    return;
   }
 
-  Future<void> fetchSections(int classId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token') ?? '';
+  _isSubmitting = true;
+  setState(() => isLoading = true);
 
-    final response = await http.post(
-      Uri.parse('https://rmps.apppro.in/api/get_section'),
-      headers: {
-        'Authorization': 'Bearer $token',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      body: jsonEncode({'ClassId': classId}),
-    );
+  try {
+    final token = await ApiService.getToken(); // already secure
 
-    if (response.statusCode == 200) {
-      setState(() {
-        sections = jsonDecode(response.body);
-        selectedSectionId = null; // Reset section on class change
-      });
-    } else {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Failed to fetch sections")),
-        );
-      }
-    }
-  }
+    final isEdit = widget.homeworkToEdit != null;
+    final endpoint = isEdit
+        ? "/teacher/homework/update"
+        : "/teacher/homework/store";
 
-  // --- New `fetchHomeworkDetails` Function ---
-  Future<void> fetchHomeworkDetails(int homeworkId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token') ?? '';
-
-    final response = await http.post(
-      Uri.parse('https://rmps.apppro.in/api/teacher/homework/edit'),
-      headers: {
-        'Authorization': 'Bearer $token',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      body: jsonEncode({'HomeworkId': homeworkId}),
-    );
-
-    if (response.statusCode == 200) {
-      final Map<String, dynamic> data = jsonDecode(response.body);
-
-      // Title aur Description ko set karein
-      setState(() {
-        _titleController.text = data['HomeworkTitle'] ?? '';
-        _descriptionController.text = data['Remark'] ?? '';
-        assignDate = DateTime.tryParse(data['WorkDate'] ?? '');
-        submissionDate = DateTime.tryParse(data['SubmissionDate'] ?? '');
-      });
-
-      // Class aur Section ID ko check aur set karein
-      final classId = int.tryParse(data['Class'] ?? '');
-      final sectionId = int.tryParse(data['Section'] ?? '');
-
-      if (classId != null && classes.any((c) => c['id'] == classId)) {
-        setState(() {
-          selectedClassId = classId;
-        });
-        // Sections fetch karein
-        await fetchSections(selectedClassId!);
-        if (sectionId != null && sections.any((s) => s['id'] == sectionId)) {
-          setState(() {
-            selectedSectionId = sectionId;
-          });
-        }
-      }
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to load homework details')),
-      );
-    }
-  }
-  // --- Updated `submitHomework` Function ---
-
-  Future<void> submitHomework() async {
-    // ... (rest of the validation code is the same)
-    if (selectedClassId == null ||
-        selectedSectionId == null ||
-        assignDate == null ||
-        submissionDate == null ||
-        _titleController.text.isEmpty ||
-        _descriptionController.text.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("Please fill all fields")));
-      return;
-    }
-
-    setState(() => isLoading = true);
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token') ?? '';
-    final isEditMode = widget.homeworkToEdit != null;
-    final apiUrl = isEditMode
-        ? 'https://rmps.apppro.in/api/teacher/homework/update'
-        : 'https://rmps.apppro.in/api/teacher/homework/store';
-
-    final request = http.MultipartRequest('POST', Uri.parse(apiUrl))
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse("${ApiService.baseUrl}$endpoint"),
+    )
       ..headers['Authorization'] = 'Bearer $token'
+      ..headers['Accept'] = 'application/json'
       ..fields['Class'] = selectedClassId.toString()
       ..fields['Section'] = selectedSectionId.toString()
-      ..fields['Title'] = _titleController.text
-      ..fields['Description'] = _descriptionController.text;
+      ..fields['Title'] = _titleController.text.trim()
+      ..fields['Description'] = _descriptionController.text.trim()
+      ..fields['AssignDate'] =
+          DateFormat('yyyy-MM-dd').format(assignDate!)
+      ..fields['SubmissionDate'] =
+          DateFormat('yyyy-MM-dd').format(submissionDate!);
 
-    if (isEditMode) {
-      request.fields['HomeworkId'] = widget.homeworkToEdit!['id'].toString();
-      request.fields['AssignDate'] = DateFormat(
-        'yyyy-MM-dd',
-      ).format(assignDate!);
-      request.fields['SubmissionDate'] = DateFormat(
-        'yyyy-MM-dd',
-      ).format(submissionDate!);
-    } else {
-      request.fields['AssignDate'] = DateFormat(
-        'yyyy-MM-dd',
-      ).format(assignDate!);
-      request.fields['SubmissionDate'] = DateFormat(
-        'yyyy-MM-dd',
-      ).format(submissionDate!);
+    if (isEdit) {
+      request.fields['HomeworkId'] =
+          widget.homeworkToEdit!['id'].toString();
     }
 
     if (selectedFile != null) {
       request.files.add(
-        await http.MultipartFile.fromPath('Attachment', selectedFile!.path),
+        await http.MultipartFile.fromPath(
+          'Attachment',
+          selectedFile!.path,
+        ),
       );
     }
 
-    try {
-      final response = await request.send();
-      final respStr = await response.stream.bytesToString();
-      final decoded = jsonDecode(respStr);
+    final resp = await request.send();
+    final body = await resp.stream.bytesToString();
+    final decoded = jsonDecode(body);
 
-      setState(() => isLoading = false);
-      if (response.statusCode == 200) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(decoded['message'])));
-        Navigator.pop(context, true);
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(decoded['message'] ?? 'Upload failed')),
-        );
-      }
-    } catch (e) {
-      setState(() => isLoading = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+    if (!mounted) return;
+
+    if (resp.statusCode == 200) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(decoded['message'] ?? 'Success')),
+      );
+      Navigator.pop(context, true);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(decoded['message'] ?? 'Failed')),
+      );
     }
-  }
-
-  Future<void> pickImage() async {
-    final XFile? image = await _picker.pickImage(
-      source: ImageSource.gallery, // OR ImageSource.camera
-      imageQuality: 80,
+  } catch (e) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Error: $e")),
     );
-
-    if (image != null) {
-      setState(() {
-        selectedFile = File(image.path);
-      });
-    }
+  } finally {
+    _isSubmitting = false;
+    if (mounted) setState(() => isLoading = false);
   }
+}
+
+
+ Future<void> pickImage() async {
+  final XFile? image = await _picker.pickImage(
+    source: ImageSource.gallery, 
+    imageQuality: 80,
+  );
+
+  if (image != null) {
+    setState(() {
+      selectedFile = File(image.path);
+    });
+  }
+}
 
   @override
   Widget build(BuildContext context) {
-    // ... (rest of the build method is the same)
     return Scaffold(
       appBar: AppBar(
         title: Text(
           widget.homeworkToEdit != null ? "Edit Homework" : "Add Homework",
           style: const TextStyle(color: Colors.white),
         ),
-        backgroundColor: Colors.deepPurple,
+        backgroundColor: AppColors.primary,
         iconTheme: const IconThemeData(color: Colors.white),
       ),
       body: isLoading
           ? const Center(
-              child: CircularProgressIndicator(color: Colors.deepPurple),
+              child: CircularProgressIndicator(color: AppColors.primary),
             )
           : SingleChildScrollView(
               padding: const EdgeInsets.all(16),
@@ -279,7 +237,7 @@ class _TeacherAddHomeworkPageState extends State<TeacherAddHomeworkPage> {
                 children: [
                   DropdownButtonFormField<int>(
                     decoration: const InputDecoration(labelText: "Class"),
-                    initialValue: selectedClassId,
+                    value: selectedClassId,
                     items: classes.map((cls) {
                       return DropdownMenuItem<int>(
                         value: cls['id'],
@@ -294,7 +252,7 @@ class _TeacherAddHomeworkPageState extends State<TeacherAddHomeworkPage> {
                   const SizedBox(height: 10),
                   DropdownButtonFormField<int>(
                     decoration: const InputDecoration(labelText: "Section"),
-                    initialValue: selectedSectionId,
+                    value: selectedSectionId,
                     items: sections.map((sec) {
                       return DropdownMenuItem<int>(
                         value: sec['id'],
@@ -369,7 +327,7 @@ class _TeacherAddHomeworkPageState extends State<TeacherAddHomeworkPage> {
                               ),
                               const Icon(
                                 Icons.calendar_today,
-                                color: Colors.deepPurple,
+                                color: AppColors.primary,
                               ),
                             ],
                           ),
@@ -430,7 +388,7 @@ class _TeacherAddHomeworkPageState extends State<TeacherAddHomeworkPage> {
                               ),
                               const Icon(
                                 Icons.calendar_today,
-                                color: Colors.deepPurple,
+                                color: AppColors.primary,
                               ),
                             ],
                           ),
@@ -454,8 +412,9 @@ class _TeacherAddHomeworkPageState extends State<TeacherAddHomeworkPage> {
                       selectedFile == null
                           ? ElevatedButton.icon(
                               icon: const Icon(Icons.attach_file),
-                              label: const Text("Choose Image"),
+                              label: const Text("Choose File"),
                               onPressed: pickImage,
+
                             )
                           : Container(
                               padding: const EdgeInsets.symmetric(
@@ -463,15 +422,15 @@ class _TeacherAddHomeworkPageState extends State<TeacherAddHomeworkPage> {
                                 vertical: 10,
                               ),
                               decoration: BoxDecoration(
-                                border: Border.all(color: Colors.deepPurple),
+                                border: Border.all(color: AppColors.primary),
                                 borderRadius: BorderRadius.circular(10),
-                                color: Colors.deepPurple.withOpacity(0.05),
+                                color: AppColors.primary.withOpacity(0.05),
                               ),
                               child: Row(
                                 children: [
                                   const Icon(
                                     Icons.insert_drive_file,
-                                    color: Colors.deepPurple,
+                                    color: AppColors.primary,
                                   ),
                                   const SizedBox(width: 8),
                                   Expanded(
@@ -504,7 +463,7 @@ class _TeacherAddHomeworkPageState extends State<TeacherAddHomeworkPage> {
                     width: double.infinity,
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.deepPurple,
+                        backgroundColor: AppColors.primary,
                       ),
                       onPressed: submitHomework,
                       child: Text(

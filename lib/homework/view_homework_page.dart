@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:open_file/open_file.dart';
+import 'package:raj_modern_public_school/api_service.dart';
 
 class ViewHomeworksPage extends StatelessWidget {
   final List<Map<String, dynamic>> homeworks;
@@ -18,7 +19,7 @@ class ViewHomeworksPage extends StatelessWidget {
           "Assigned Homeworks",
           style: TextStyle(color: Colors.white),
         ),
-        backgroundColor: Colors.deepPurple,
+        backgroundColor: AppColors.primary,
         iconTheme: const IconThemeData(color: Colors.white),
       ),
       body: ListView.builder(
@@ -26,6 +27,7 @@ class ViewHomeworksPage extends StatelessWidget {
         itemCount: homeworks.length,
         itemBuilder: (context, index) {
           final hw = homeworks[index];
+
           return Card(
             elevation: 3,
             margin: const EdgeInsets.symmetric(vertical: 8),
@@ -46,17 +48,15 @@ class ViewHomeworksPage extends StatelessWidget {
                   ? IconButton(
                       icon: const Icon(
                         Icons.download,
-                        color: Colors.deepPurple,
+                        color: AppColors.primary,
                       ),
                       onPressed: () {
                         String fileUrl = hw['Attachment'];
-                        String fileName = fileUrl.split('/').last;
-
                         if (!fileUrl.startsWith('http')) {
-                          fileUrl = 'https://rmps.apppro.in/$fileUrl';
+                          fileUrl =
+                              ApiService.homeworkAttachment(fileUrl);
                         }
-
-                        downloadFile(context, fileUrl, fileName);
+                        downloadFile(context, fileUrl);
                       },
                     )
                   : null,
@@ -77,34 +77,32 @@ class ViewHomeworksPage extends StatelessWidget {
     }
   }
 
-  Future<void> downloadFile(
-    BuildContext context,
-    String fileUrl,
-    String fileName,
-  ) async {
+  // ============================
+  // 📥 SAFE DOWNLOAD (iOS + ANDROID)
+  // ============================
+  Future<void> downloadFile(BuildContext context, String fileUrl) async {
     try {
       final response = await http.get(Uri.parse(fileUrl));
-
-      if (response.statusCode == 200) {
-        // ✅ App private storage (NO permission needed)
-        final dir = await getApplicationDocumentsDirectory();
-        final filePath = '${dir.path}/$fileName';
-
-        final file = File(filePath);
-        await file.writeAsBytes(response.bodyBytes);
-
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text("File downloaded")));
-
-        await OpenFile.open(filePath);
-      } else {
-        throw Exception('Download failed (${response.statusCode})');
+      if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
+        throw Exception("Failed to download file");
       }
+
+      // ✅ App-specific directory (NO permission needed)
+      final dir = await getApplicationDocumentsDirectory();
+      final fileName = fileUrl.split('/').last;
+      final file = File('${dir.path}/$fileName');
+
+      await file.writeAsBytes(response.bodyBytes, flush: true);
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("Downloaded to ${file.path}")));
+
+      await OpenFile.open(file.path);
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text("Download error")));
+      ).showSnackBar(SnackBar(content: Text("Download error: $e")));
     }
   }
 }

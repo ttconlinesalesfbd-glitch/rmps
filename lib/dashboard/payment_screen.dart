@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:raj_modern_public_school/api_service.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 class PaymentWebView extends StatefulWidget {
@@ -62,7 +63,7 @@ class _PaymentWebViewState extends State<PaymentWebView> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Complete Payment'),
-        backgroundColor: Colors.deepPurple,
+        backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
       ),
       body: Stack(

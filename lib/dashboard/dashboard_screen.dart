@@ -1,13 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:raj_modern_public_school/Attendance_UI/attendance_box.dart';
-import 'package:raj_modern_public_school/dashboard/payment_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:raj_modern_public_school/Attendance_UI/stu_attendance_page.dart';
 import 'package:raj_modern_public_school/Exam/exam_schedule.dart';
@@ -16,10 +13,11 @@ import 'package:raj_modern_public_school/Attendance_UI/attendance_pie_chart.dart
 import 'package:raj_modern_public_school/Notification/notification_list.dart';
 import 'package:raj_modern_public_school/connect_teacher/connect_with_us.dart';
 import 'package:raj_modern_public_school/dashboard/calendar.dart';
+import 'package:raj_modern_public_school/dashboard/payment_screen.dart';
 import 'package:raj_modern_public_school/homework/homework_model.dart';
 import 'package:raj_modern_public_school/homework/homework_page.dart';
 import 'package:raj_modern_public_school/dashboard/timetable_page.dart';
-import 'package:raj_modern_public_school/login_page.dart';
+import 'package:raj_modern_public_school/main.dart';
 import 'package:raj_modern_public_school/payment/fee_details_page.dart';
 import 'package:raj_modern_public_school/payment/payment_page.dart';
 import 'package:raj_modern_public_school/profile_page.dart';
@@ -27,20 +25,20 @@ import 'package:raj_modern_public_school/school_info_page.dart';
 import 'package:raj_modern_public_school/complaint/view_complaints_page.dart';
 import 'package:raj_modern_public_school/subjects_page.dart';
 import 'package:raj_modern_public_school/syllabus/syllabus.dart';
-
+import 'package:raj_modern_public_school/Attendance_UI/attendnce_box.dart';
 import 'package:raj_modern_public_school/Attendance_UI/stu_attendance_report.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:raj_modern_public_school/api_service.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
-
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _DashboardScreenState extends State<DashboardScreen> with RouteAware {
   bool isLoading = true;
-
+  bool isRefreshing = false;
   String studentName = '';
   String studentPhoto = '';
   String schoolName = '';
@@ -57,17 +55,46 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<dynamic> notices = [];
   List<dynamic> events = [];
   List<dynamic> siblings = [];
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    routeObserver.subscribe(this, ModalRoute.of(context)! as PageRoute);
+  }
+
+  @override
+  void didPopNext() {
+    // jab kisi page se BACK aake dashboard dikhe
+    _refreshDashboard();
+  }
+
+  @override
+  void dispose() {
+    routeObserver.unsubscribe(this);
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
-    initData();
+    _refreshDashboard(); // app open / login ke baad
   }
 
-  Future<void> initData() async {
+  Future<void> _refreshDashboard() async {
+    if (!mounted) return;
+
+    if (!isLoading) {
+      setState(() => isRefreshing = true);
+    }
+
     await loadProfileData();
-    await fetchDashboardData();
+    await fetchDashboardData(context);
+
+    if (!mounted) return;
+
     setState(() {
       isLoading = false;
+      isRefreshing = false;
     });
   }
 
@@ -80,35 +107,43 @@ class _DashboardScreenState extends State<DashboardScreen> {
     studentsection = prefs.getString('section') ?? '';
   }
 
-  Future<void> fetchDashboardData() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token') ?? '';
+  Widget buildStudentImage(String? photo) {
+    if (photo == null || photo.isEmpty) {
+      return CircleAvatar(radius: 40, child: Icon(Icons.person));
+    }
 
-    final response = await http.post(
-      Uri.parse('https://rmps.apppro.in/api/student/dashboard'),
-      headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
-    );
+    return Image.network(photo, width: 80, height: 80, fit: BoxFit.cover);
+  }
+
+  Future<void> fetchDashboardData(BuildContext context) async {
+    final response = await ApiService.post(context, "/student/dashboard");
+
+    if (response == null) return;
+
+    debugPrint("🔵 DASHBOARD STATUS: ${response.statusCode}");
+    debugPrint("🔵 DASHBOARD BODY: ${response.body}");
 
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
-
-      dues = data['dues'] ?? 0;
+      debugPrint("📢 RAW NOTICES: ${data['notices']}");
       fine = data['fine'] ?? 0;
+      dues = data['dues'] ?? 0;
       payments = int.tryParse(data['payments'].toString()) ?? 0;
+
       final rawDate = data['payment_date'] ?? '';
       if (rawDate.isNotEmpty) {
         try {
           final dateObject = DateTime.parse(rawDate);
           lastPaymentDate =
               '${dateObject.day}/${dateObject.month}/${dateObject.year}';
-        } catch (e) {
+        } catch (_) {
           lastPaymentDate = rawDate;
         }
-      } else {
-        lastPaymentDate = '';
       }
+
       status = data['today_status'] ?? '';
       subjects = data['subjects'] ?? 0;
+
       attendance = {
         'present': data['attendances']?['present'] ?? 0,
         'absent': data['attendances']?['absent'] ?? 0,
@@ -116,29 +151,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
         'half_day': data['attendances']?['half_day'] ?? 0,
         'working_days': data['attendances']?['working_days'] ?? 0,
       };
+
       homeworks = List<Map<String, dynamic>>.from(data['homeworks'] ?? []);
       notices = data['notices'] ?? [];
       events = data['events'] ?? [];
       siblings = data['siblings'] ?? [];
-    } else {
-      if (response.statusCode == 401) {
-        await prefs.clear();
-        Navigator.pushAndRemoveUntil(
-          context,
-          MaterialPageRoute(builder: (_) => LoginPage()),
-          (route) => false,
-        );
 
-        return;
-      }
-      print('❌ Dashboard fetch failed: ${response.statusCode}');
+      return;
     }
-    prefs.getKeys().forEach((key) {
-      print('$key = ${prefs.get(key)}');
-      FirebaseMessaging.instance.getToken().then((fcmToken) {
-        print("🟢 FCM Device Token: $fcmToken");
-      });
-    });
   }
 
   void _showSiblingPopup(BuildContext context) {
@@ -165,7 +185,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Row(
           children: [
-            Icon(Icons.people, color: Colors.blue),
+            Icon(Icons.people, color: AppColors.info),
             SizedBox(width: 8),
             Text(
               'Switch Sibling',
@@ -184,7 +204,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   sibling['Photo'] != null &&
                       sibling['Photo'].toString().isNotEmpty
                   ? sibling['Photo'].toString()
-                  : 'https://rmps.apppro.in/uploads/no_image.png';
+                  : ApiService.siblingUrl;
 
               final name = sibling['Name'] ?? 'Unknown';
               final className = sibling['Class'].toString();
@@ -201,8 +221,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 elevation: 2,
                 child: ListTile(
                   leading: CircleAvatar(
-                    backgroundImage: NetworkImage(photoUrl),
+                    radius: 22,
+                    backgroundColor: Colors.grey.shade200,
+                    child: ClipOval(
+                      child: Image.network(
+                        photoUrl,
+                        width: 44,
+                        height: 44,
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) {
+                          return Icon(
+                            Icons.person,
+                            size: 26,
+                            color: Colors.grey,
+                          );
+                        },
+                      ),
+                    ),
                   ),
+
                   title: Text(
                     name,
                     style: const TextStyle(fontWeight: FontWeight.w600),
@@ -232,7 +269,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           actions: [
                             TextButton(
                               onPressed: () => Navigator.pop(confirmContext),
-                              child: const Text('Cancel'),
+                              child: const Text('Cancel', style: TextStyle(color: AppColors.primary),),
                             ),
                             ElevatedButton.icon(
                               onPressed: () async {
@@ -248,7 +285,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               icon: const Icon(Icons.check_circle, size: 18),
                               label: const Text('Yes, Switch'),
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.blue,
+                                backgroundColor: AppColors.info,
                                 foregroundColor: Colors.white,
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(8),
@@ -268,7 +305,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
+            child: const Text('Close', style: TextStyle(color: AppColors.primary),),
           ),
         ],
       ),
@@ -278,86 +315,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _shiftLogin(String studentId) async {
     if (!mounted) return;
     try {
-      // Step 1: Get SharedPreferences instance
-      final prefs = await SharedPreferences.getInstance();
+      final response = await ApiService.post(
+        context,
+        "/student/shift_login",
+        body: {'id': studentId},
+      );
 
-      // Step 2: Get saved token before making request
-      final token = prefs.getString('token') ?? '';
-      print('🔑 Using Token: $token');
+      if (response == null) return;
 
-      // Step 3: Prepare API request
-      final url = Uri.parse('https://rmps.apppro.in/api/student/shift_login');
-      final headers = {
-        'Accept': 'application/json',
-        'Authorization': 'Bearer $token',
-      };
-      final body = {'id': studentId};
-      print('📤 Request Body: $body');
+      final data = jsonDecode(response.body);
 
-      // Step 4: Send request
-      final response = await http.post(url, headers: headers, body: body);
-
-      print('📥 Response Status: ${response.statusCode}');
-      print('📥 Response Body: ${response.body}');
-
-      // Step 5: Handle non-200 responses
-      if (response.statusCode != 200) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Server error (${response.statusCode})')),
-        );
-        return;
-      }
-
-      // Step 6: Decode JSON
-      dynamic data;
-      try {
-        data = json.decode(response.body);
-      } catch (e) {
-        print('❌ Failed to decode response as JSON');
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Invalid server response')),
-        );
-        return;
-      }
-
-      // Step 7: Handle response data
       if (data['status'] == true) {
-        print('✅ Shift Login Successful for ID: $studentId');
-
-        // Step 8: Store new login info & token
-        await prefs.setString('token', data['token'] ?? '');
-        await prefs.setString('user_type', data['user_type'] ?? '');
-        await prefs.setString(
-          'student_name',
-          data['profile']['student_name'] ?? '',
-        );
-        await prefs.setString(
-          'class_name',
-          data['profile']['class_name'] ?? '',
-        );
-        await prefs.setString('section', data['profile']['section'] ?? '');
-        await prefs.setString(
-          'school_name',
-          data['profile']['school_name'] ?? '',
-        );
-        await prefs.setString(
-          'student_photo',
-          data['profile']['student_photo'] ?? '',
-        );
-
-        print('💾 New Token Saved: ${data['token']}');
+        await ApiService.saveSession(data);
 
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Switched student successfully')),
-        );
 
-        // Navigate fresh to dashboard/home
         Navigator.pushReplacement(
           context,
-          MaterialPageRoute(builder: (_) => DashboardScreen()),
+          MaterialPageRoute(builder: (_) => const DashboardScreen()),
         );
       } else {
         print('❌ Shift login failed: ${data['message']}');
@@ -374,7 +349,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ).showSnackBar(const SnackBar(content: Text('Something went wrong')));
     }
   }
-
   void _showPaymentConfirmationDialog(
     BuildContext dashboardContext,
     int dues,
@@ -390,7 +364,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           title: const Text(
             'Confirm Payment',
             style: TextStyle(
-              color: Colors.deepPurple,
+              color: AppColors.primary,
               fontWeight: FontWeight.bold,
             ),
           ),
@@ -406,7 +380,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           actions: [
             TextButton(
-              child: const Text("Cancel"),
+              child: const Text("Cancel", style: TextStyle(color: AppColors.primary),),
               onPressed: () {
                 print('DEBUG: Payment cancelled by user from dialog.');
                 Navigator.pop(dialogContext);
@@ -414,7 +388,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
             TextButton(
               style: TextButton.styleFrom(
-                foregroundColor: Colors.deepPurple,
+                foregroundColor: AppColors.primary,
                 textStyle: const TextStyle(fontWeight: FontWeight.bold),
               ),
               child: const Text("Proceed to Pay"),
@@ -469,7 +443,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ScaffoldMessenger.of(dashboardContext).showSnackBar(
                         const SnackBar(content: Text('Payment Successful! ✅')),
                       );
-                      await fetchDashboardData();
+                      await fetchDashboardData(context);
                       print(
                         'DEBUG: Dashboard data fetched successfully before popping.',
                       );
@@ -532,131 +506,92 @@ class _DashboardScreenState extends State<DashboardScreen> {
       },
     );
   }
+Future<Map<String, String>?> initiatePayment({
+  required int amount,
+  required int fine,
+}) async {
+  try {
+    final response = await ApiService.post(
+      context,
+      "/student/payment/initiate",
+      body: {
+        'amount': amount.toString(),
+        'fine': fine.toString(),
+      },
+    );
 
-  Future<Map<String, String>?> initiatePayment({
-    required int amount,
-    required int fine,
-  }) async {
-    const url = 'https://rmps.apppro.in/api/student/payment/initiate';
+    if (response == null) {
+      debugPrint("❌ initiatePayment: response null");
+      return null;
+    }
 
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final authToken = prefs.getString('token') ?? '';
+    debugPrint("DEBUG: StatusCode → ${response.statusCode}");
+    debugPrint("DEBUG: Body → ${response.body}");
 
-      if (authToken.isEmpty) {
-        print(
-          'ERROR: Auth token not found in SharedPreferences. Cannot proceed.',
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+
+      if (data.containsKey('payment_url') &&
+          data.containsKey('ref_no')) {
+        return {
+          'payment_url': data['payment_url'].toString(),
+          'ref_no': data['ref_no'].toString(),
+        };
+      } else {
+        debugPrint(
+          '❌ initiatePayment: payment_url / ref_no missing',
         );
         return null;
       }
-      print('DEBUG: Auth Token successfully retrieved.');
-
-      // 2. Body Data Preparation (FormData format)
-      final bodyData = {'amount': amount.toString(), 'fine': fine.toString()};
-      print('DEBUG: Request Body (FormData): $bodyData');
-      print('➡️ REQUEST URL: $url');
-      print('➡️ REQUEST HEADERS: Authorization: Bearer $authToken');
-      print('➡️ REQUEST BODY: $bodyData');
-
-      // 3. API Call
-      final response = await http.post(
-        Uri.parse(url),
-        headers: <String, String>{
-          // http package handles Content-Type: application/x-www-form-urlencoded
-          'Authorization': 'Bearer $authToken',
-        },
-        body: bodyData,
+    } else {
+      debugPrint(
+        '❌ initiatePayment failed → ${response.statusCode}',
       );
-      print('⬅️ RESPONSE STATUS: ${response.statusCode}');
-      print('⬅️ RESPONSE HEADERS: ${response.headers}');
-      print('⬅️ RESPONSE BODY (FULL):');
-      print(response.body);
-      print('DEBUG: API Call complete. Status Code: ${response.statusCode}');
-
-      // 4. Response Handling
-      if (response.statusCode == 200) {
-        // Success
-        try {
-          final data = jsonDecode(response.body);
-          print('DEBUG: Response Body (Success): ${response.body}');
-
-          if (data.containsKey('payment_url') && data.containsKey('ref_no')) {
-            print('DEBUG: Payment URL and RefNo retrieved successfully.');
-            return {
-              'payment_url': data['payment_url'].toString(),
-              'ref_no': data['ref_no'].toString(),
-            };
-          } else {
-            print(
-              'ERROR: Status 200, but "payment_url" or "ref_no" key missing in JSON response.',
-            );
-            return null;
-          }
-        } catch (e) {
-          print(
-            'ERROR: Failed to decode JSON response body. Received non-JSON data or empty body.',
-          );
-          print('Response Body: ${response.body}');
-          return null;
-          
-        }
-      } else {
-        print('ERROR: Failed to initiate payment.');
-        print('Status code: ${response.statusCode}');
-
-        final responseBody = response.body.length > 500
-            ? response.body.substring(0, 500) + '...'
-            : response.body;
-        print('Response body (Partial): $responseBody');
-        return null;
-      }
-    } catch (e) {
-      // 5. Network/Other Errors
-      print('CRITICAL ERROR: Exception caught during http request: $e');
       return null;
     }
+  } catch (e) {
+    debugPrint("❌ initiatePayment exception: $e");
+    return null;
   }
+}
+Future<String?> checkPaymentStatus({
+  required String refNo,
+}) async {
+  try {
+    final response = await ApiService.get(
+      context,
+      "/student/payment/status/$refNo",
+    );
 
-  Future<String?> checkPaymentStatus({required String refNo}) async {
-    final url = 'https://peps.apppro.in/api/student/payment/status/$refNo';
-
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final authToken = prefs.getString('token') ?? '';
-
-      if (authToken.isEmpty) {
-        print('Error: Auth token not found in SharedPreferences.');
-        return 'error';
-      }
-
-      final response = await http.get(
-        Uri.parse(url),
-        headers: <String, String>{
-          'Content-Type': 'application/json; charset=UTF-8',
-          'Authorization': 'Bearer $authToken',
-        },
-      );
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-
-        if (data.containsKey('status')) {
-          return data['status'].toString();
-        } else {
-          print('Error: Status key not found in response.');
-          return 'unknown';
-        }
-      } else {
-        print('Failed to check status. Status code: ${response.statusCode}');
-        return 'error';
-      }
-    } catch (e) {
-      print('Error during status check: $e');
+    if (response == null) {
+      debugPrint("❌ checkPaymentStatus: response null");
       return 'error';
     }
-  }
 
-  Widget _buildDialogRow(
+    debugPrint("DEBUG: StatusCode → ${response.statusCode}");
+    debugPrint("DEBUG: Body → ${response.body}");
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+
+      if (data.containsKey('status')) {
+        return data['status'].toString();
+      } else {
+        debugPrint('❌ status key missing');
+        return 'unknown';
+      }
+    } else {
+      debugPrint(
+        '❌ checkPaymentStatus failed → ${response.statusCode}',
+      );
+      return 'error';
+    }
+  } catch (e) {
+    debugPrint("❌ checkPaymentStatus exception: $e");
+    return 'error';
+  }
+}
+ Widget _buildDialogRow(
     String label,
     String value, {
     Color color = Colors.black87,
@@ -672,7 +607,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             style: TextStyle(
               fontSize: isTotal ? 16 : 14,
               fontWeight: isTotal ? FontWeight.bold : FontWeight.w500,
-              color: isTotal ? Colors.deepPurple : Colors.grey[700],
+              color: isTotal ? AppColors.primary : Colors.grey[700],
             ),
           ),
           Text(
@@ -687,7 +622,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
     );
   }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -731,114 +665,153 @@ class _DashboardScreenState extends State<DashboardScreen> {
             GestureDetector(
               onTap: () => _showSiblingPopup(context),
               child: CircleAvatar(
-                backgroundImage: studentPhoto.isNotEmpty
-                    ? NetworkImage(studentPhoto)
-                    : const AssetImage('assets/images/default_avatar.png')
-                          as ImageProvider,
                 radius: 15,
+                backgroundColor: Colors.grey.shade200,
+                child: ClipOval(
+                  child: Image.network(
+                    studentPhoto,
+                    width: 30,
+                    height: 30,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) {
+                      return Image.asset(
+                        AppAssets.defaultAvatar,
+                        width: 30,
+                        height: 30,
+                        fit: BoxFit.cover,
+                      );
+                    },
+                  ),
+                ),
               ),
             ),
             const SizedBox(width: 5),
           ],
         ),
-        backgroundColor: Colors.deepPurple,
+        backgroundColor: AppColors.primary,
       ),
       body: isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      FeePayCard(
-                        dues: dues,
-                        fine: fine,
-                        onCardTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => FeeDetailsPage()),
-                        ),
-                        onPayNowTap: () =>
-                            _showPaymentConfirmationDialog(context, dues, fine),
-                      ),
-                      GestureDetector(
-                        child: DashboardCard(
-                          title: 'Last Pay',
-                          value: payments.toString(),
-                          borderColor: Colors.green,
-                          backgroundColor: Colors.green.shade50,
-                          textColor: Colors.green,
-                          date: lastPaymentDate,
-                        ),
-                        onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => PaymentPage()),
-                        ),
-                      ),
-                      GestureDetector(
-                        child: DashboardCard(
-                          title: 'Subjects',
-                          value: subjects.toString(),
-                          borderColor: Colors.blue,
-                          backgroundColor: Colors.blue.shade50,
-                          textColor: Colors.blue,
-                        ),
-                        onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => SubjectsPage()),
-                        ),
-                      ),
-                    ],
+          ? const Center(
+              child: CircularProgressIndicator(color: AppColors.primary),
+            )
+          : Column(
+              children: [
+                if (isRefreshing)
+                  const LinearProgressIndicator(
+                    minHeight: 3,
+                    color: AppColors.primary,
                   ),
-                  const SizedBox(height: 30),
-                  GestureDetector(
-                    child: AttendanceCard(
-                      title: "Today's Attendance",
-                      place: "School",
-                      status: status,
-                      icon: Icons.school,
-                    ),
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => AttendanceAnalyticsPage(),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Container(
-                    height: 225,
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.deepPurple.shade100),
-                      boxShadow: [
-                        BoxShadow(color: Colors.grey.shade200, blurRadius: 6),
+
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: [
+                             FeePayCard(
+                          dues: dues,
+                          fine: fine,
+                          onCardTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => FeeDetailsPage()),
+                          ),
+                          onPayNowTap: () => _showPaymentConfirmationDialog(
+                            context,
+                            dues,
+                            fine,
+                          ),
+                        ),
+                            GestureDetector(
+                              child: DashboardCard(
+                                title: 'Last Pay',
+                                value: payments.toString(),
+                                borderColor: AppColors.success,
+                                backgroundColor: AppColors.success.shade50,
+                                textColor: AppColors.success,
+                                date: lastPaymentDate,
+                              ),
+                              onTap: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => PaymentPage(),
+                                ),
+                              ),
+                            ),
+                            GestureDetector(
+                              child: DashboardCard(
+                                title: 'Subjects',
+                                value: subjects.toString(),
+                                borderColor: AppColors.info,
+                                backgroundColor: AppColors.info.shade50,
+                                textColor: AppColors.info,
+                              ),
+                              onTap: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => SubjectsPage(),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 30),
+                        GestureDetector(
+                          child: AttendanceCard(
+                            title: "Today's Attendance",
+                            place: "School",
+                            status: status,
+                            icon: Icons.school,
+                          ),
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => AttendanceAnalyticsPage(),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Container(
+                          height: 225,
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: AppColors.primary.shade100,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.grey.shade200,
+                                blurRadius: 6,
+                              ),
+                            ],
+                          ),
+                          child: AttendancePieChart(
+                            present: attendance['present'] ?? 0,
+                            absent: attendance['absent'] ?? 0,
+                            leave: attendance['leave'] ?? 0,
+                            halfDay: attendance['half_day'] ?? 0,
+                            workingDays: attendance['working_days'] ?? 0,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        buildRecentHomeworks(context, homeworks),
+                        const SizedBox(height: 10),
+                        SizedBox(
+                          height: 350,
+                          child: NoticesEventsToggle(
+                            initialNotices: notices,
+                            initialEvents: events,
+                          ),
+                        ),
                       ],
                     ),
-                    child: AttendancePieChart(
-                      present: attendance['present'] ?? 0,
-                      absent: attendance['absent'] ?? 0,
-                      leave: attendance['leave'] ?? 0,
-                      halfDay: attendance['half_day'] ?? 0,
-                      workingDays: attendance['working_days'] ?? 0,
-                    ),
                   ),
-                  const SizedBox(height: 10),
-                  buildRecentHomeworks(context, homeworks),
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    height: 350,
-                    child: NoticesEventsToggle(
-                      initialNotices: notices,
-                      initialEvents: events,
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
     );
   }
@@ -917,7 +890,6 @@ class DashboardCard extends StatelessWidget {
 class InfoCard extends StatelessWidget {
   final Map<String, dynamic> item;
   final bool isEvent;
-  final String baseUrl = 'https://rmps.apppro.in/';
 
   const InfoCard({super.key, required this.item, required this.isEvent});
 
@@ -931,27 +903,55 @@ class InfoCard extends StatelessWidget {
   }
 
   Future<void> _downloadFile(BuildContext context, String url) async {
-    try {
-      final response = await http.get(Uri.parse(url));
-      if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
-        throw Exception(
-          "Failed to download file. Status: ${response.statusCode}",
-        );
-      }
-      final dir = await getApplicationDocumentsDirectory();
-      final fileName = url.split('/').last;
-      final file = File('${dir.path}/$fileName');
-      await file.writeAsBytes(response.bodyBytes, flush: true);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Downloaded and saved to: ${dir.path}/$fileName"),
-        ),
-      );
-      await OpenFile.open(file.path);
-    } catch (e) {
+    if (url.isEmpty) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text("Download error: $e")));
+      ).showSnackBar(const SnackBar(content: Text("Attachment not available")));
+      return;
+    }
+
+    try {
+      final fileName = url.split('/').last;
+      late File file;
+
+      // 🔽 DIRECT HTTP (S3 public file)
+      final response = await http.get(Uri.parse(url));
+
+      if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
+        throw Exception("Download failed");
+      }
+
+      // ================= ANDROID =================
+      if (Platform.isAndroid) {
+        final downloadsDir = Directory('/storage/emulated/0/Download');
+        file = File('${downloadsDir.path}/$fileName');
+
+        await file.writeAsBytes(response.bodyBytes, flush: true);
+
+        // ✅ PREVIEW
+        await OpenFile.open(file.path);
+
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("📥 Downloaded & Preview opened")),
+        );
+      }
+
+      // ================= iOS =================
+      if (Platform.isIOS) {
+        final dir = await getApplicationDocumentsDirectory();
+        file = File('${dir.path}/$fileName');
+
+        await file.writeAsBytes(response.bodyBytes, flush: true);
+
+        // ✅ PREVIEW
+        await OpenFile.open(file.path);
+      }
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("❌ Download failed")));
     }
   }
 
@@ -975,12 +975,16 @@ class InfoCard extends StatelessWidget {
         ? Colors.orange.shade50
         : Colors.indigo.shade50;
 
-    final String? attachmentPath = item["Attachment"];
+    final String? attachment = item["Attachment"];
+    final String schoolId = item["SchoolId"]?.toString() ?? '';
     final bool hasAttachment =
-        attachmentPath != null && attachmentPath.isNotEmpty;
+        attachment != null && attachment.isNotEmpty && schoolId.isNotEmpty;
+    final String folder = isEvent ? 'event' : 'notice';
     final String fullAttachmentUrl = hasAttachment
-        ? baseUrl + attachmentPath
+        ? ApiService.attachmentUrl(schoolId, folder, attachment)
         : '';
+
+    debugPrint("📎 NOTICE ATTACHMENT URL: $fullAttachmentUrl");
 
     return Card(
       elevation: 3,
@@ -1104,16 +1108,16 @@ class NoticesEventsToggle extends StatelessWidget {
               decoration: BoxDecoration(
                 color: Colors.grey[200],
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.deepPurple, width: 1),
+                border: Border.all(color: AppColors.primary, width: 1),
               ),
               child: TabBar(
                 indicatorSize: TabBarIndicatorSize.tab,
                 indicator: BoxDecoration(
                   borderRadius: BorderRadius.circular(20),
-                  color: Colors.deepPurple,
+                  color: AppColors.primary,
                 ),
                 labelColor: Colors.white,
-                unselectedLabelColor: Colors.deepPurple,
+                unselectedLabelColor: AppColors.primary,
                 splashBorderRadius: BorderRadius.circular(20),
                 tabs: const [
                   Tab(text: 'Notices'),
@@ -1159,18 +1163,32 @@ class LeftSidebarMenu extends StatelessWidget {
         child: ListView(
           children: [
             Container(
-              color: Colors.deepPurple,
+              color: AppColors.primary,
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
               height: 120,
               child: Row(
                 children: [
                   CircleAvatar(
                     radius: 26,
-                    backgroundImage: studentPhoto.isNotEmpty
-                        ? NetworkImage(studentPhoto)
-                        : const AssetImage('assets/images/default_avatar.png')
-                              as ImageProvider,
+                    backgroundColor: Colors.grey.shade300,
+                    child: ClipOval(
+                      child: Image.network(
+                        studentPhoto,
+                        width: 52,
+                        height: 52,
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) {
+                          return Image.asset(
+                            AppAssets.defaultAvatar,
+                            width: 52,
+                            height: 52,
+                            fit: BoxFit.cover,
+                          );
+                        },
+                      ),
+                    ),
                   ),
+
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
@@ -1207,13 +1225,19 @@ class LeftSidebarMenu extends StatelessWidget {
             ),
 
             sidebarTile(
+              context: context,
               icon: Icons.dashboard,
               title: 'Dashboard',
-              onTap: () => Navigator.pop(context),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => DashboardScreen()),
+                );
+              },
             ),
-
             sidebarTile(
               icon: Icons.person,
+              context: context,
               title: 'Profile',
               onTap: () {
                 Navigator.push(
@@ -1225,6 +1249,7 @@ class LeftSidebarMenu extends StatelessWidget {
 
             sidebarTile(
               icon: Icons.book,
+              context: context,
               title: 'Homeworks',
               onTap: () {
                 Navigator.push(
@@ -1234,6 +1259,7 @@ class LeftSidebarMenu extends StatelessWidget {
               },
             ),
             sidebarTile(
+              context: context,
               icon: Icons.calendar_month,
               title: 'Attendance',
               onTap: () {
@@ -1243,8 +1269,8 @@ class LeftSidebarMenu extends StatelessWidget {
                 );
               },
             ),
-
             sidebarTile(
+              context: context,
               icon: Icons.calendar_today,
               title: 'Time-Table',
               onTap: () {
@@ -1255,6 +1281,7 @@ class LeftSidebarMenu extends StatelessWidget {
               },
             ),
             sidebarTile(
+              context: context,
               icon: Icons.calendar_month,
               title: 'Calendar',
               onTap: () {
@@ -1266,6 +1293,7 @@ class LeftSidebarMenu extends StatelessWidget {
             ),
 
             sidebarTile(
+              context: context,
               icon: Icons.subject,
               title: 'Subjects',
               onTap: () {
@@ -1276,6 +1304,7 @@ class LeftSidebarMenu extends StatelessWidget {
               },
             ),
             sidebarTile(
+              context: context,
               icon: Icons.book_sharp,
               title: 'Syllabus',
               onTap: () {
@@ -1286,6 +1315,7 @@ class LeftSidebarMenu extends StatelessWidget {
               },
             ),
             sidebarTile(
+              context: context,
               icon: Icons.receipt_long_outlined,
               title: 'Exam Schedule',
               onTap: () {
@@ -1296,6 +1326,7 @@ class LeftSidebarMenu extends StatelessWidget {
               },
             ),
             sidebarTile(
+              context: context,
               icon: Icons.report,
               title: 'Complaint',
               onTap: () {
@@ -1306,6 +1337,7 @@ class LeftSidebarMenu extends StatelessWidget {
               },
             ),
             sidebarTile(
+              context: context,
               icon: Icons.attach_money,
               title: 'Fees',
               onTap: () {
@@ -1316,6 +1348,7 @@ class LeftSidebarMenu extends StatelessWidget {
               },
             ),
             sidebarTile(
+              context: context,
               icon: Icons.payment,
               title: 'Payment',
               onTap: () {
@@ -1326,6 +1359,7 @@ class LeftSidebarMenu extends StatelessWidget {
               },
             ),
             sidebarTile(
+              context: context,
               icon: Icons.list_alt_outlined,
               title: 'Result',
               onTap: () {
@@ -1336,6 +1370,7 @@ class LeftSidebarMenu extends StatelessWidget {
               },
             ),
             sidebarTile(
+              context: context,
               icon: Icons.school,
               title: 'School Info',
               onTap: () {
@@ -1347,76 +1382,45 @@ class LeftSidebarMenu extends StatelessWidget {
             ),
 
             sidebarTile(
+              context: context,
               icon: Icons.support_agent,
               title: 'Contact & Support',
               onTap: () {
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => ConnectWithUsPage()),
+                  MaterialPageRoute(
+                    builder: (_) => ConnectWithUsPage(
+                      teacherId: 0,
+                      teacherName: '',
+                      teacherPhoto: '',
+                    ),
+                  ),
                 );
               },
             ),
             ListTile(
-              leading: const Icon(Icons.logout, color: Colors.red),
-              title: const Text('Logout', style: TextStyle(color: Colors.red)),
+              leading: const Icon(Icons.logout, color: AppColors.danger),
+              title: const Text(
+                'Logout',
+                style: TextStyle(color: AppColors.danger),
+              ),
               onTap: () {
                 showDialog(
                   context: context,
-                  builder: (context) => AlertDialog(
-                    title: Text("Logout"),
-                    content: Text("Are you sure you want to logout?"),
+                  builder: (_) => AlertDialog(
+                    title: const Text("Logout"),
+                    content: const Text("Are you sure you want to logout?"),
                     actions: [
                       TextButton(
-                        child: Text("Cancel"),
                         onPressed: () => Navigator.pop(context),
+                        child: const Text("Cancel", style: TextStyle(color: AppColors.primary),),
                       ),
                       TextButton(
-                        child: Text("Logout"),
-                        onPressed: () async {
-                          final prefs = await SharedPreferences.getInstance();
-                          final token = prefs.getString('token') ?? '';
-
-                          final response = await http.post(
-                            Uri.parse('https://rmps.apppro.in/api/logout'),
-                            headers: {
-                              'Authorization': 'Bearer $token',
-                              'Accept': 'application/json',
-                            },
-                          );
-
-                          print("🔐 Logout API Response: ${response.body}");
-
-                          if (response.statusCode == 200) {
-                            final data = jsonDecode(response.body);
-
-                            if (data['status'] == true ||
-                                data['message'] == 'Logged out') {
-                              await prefs.clear();
-
-                              Navigator.pushAndRemoveUntil(
-                                context,
-                                MaterialPageRoute(builder: (_) => LoginPage()),
-                                (route) => false,
-                              );
-                            } else {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    "Logout failed: ${data['message']}",
-                                  ),
-                                ),
-                              );
-                            }
-                          } else {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  "Logout failed. Please try again.",
-                                ),
-                              ),
-                            );
-                          }
+                        onPressed: () {
+                          Navigator.pop(context);
+                          ApiService.post(context, "/logout");
                         },
+                        child: const Text("Logout"),
                       ),
                     ],
                   ),
@@ -1431,6 +1435,7 @@ class LeftSidebarMenu extends StatelessWidget {
 }
 
 Widget sidebarTile({
+  required BuildContext context,
   required IconData icon,
   required String title,
   required VoidCallback onTap,
@@ -1441,9 +1446,14 @@ Widget sidebarTile({
 
     leading: Icon(icon),
     title: Text(title),
-    onTap: onTap,
+
+    onTap: () {
+      Navigator.pop(context);
+      Future.microtask(onTap);
+    },
   );
 }
+
 
 class FeePayCard extends StatelessWidget {
   final int dues;

@@ -1,10 +1,12 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
 import 'package:open_file/open_file.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:raj_modern_public_school/api_service.dart';
 import 'package:raj_modern_public_school/teacher/teacher_homework_detail_page.dart';
 import 'package:raj_modern_public_school/teacher/teacher_homework_page.dart';
+
 
 class TeacherRecentHomeworks extends StatelessWidget {
   final List<Map<String, dynamic>> homeworks;
@@ -14,7 +16,6 @@ class TeacherRecentHomeworks extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final limitedHomeworks = homeworks.take(5).toList();
-    print("📦 Received homeworks in widget: $homeworks");
 
     return Container(
       padding: const EdgeInsets.all(8),
@@ -40,14 +41,16 @@ class TeacherRecentHomeworks extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
-                  color: Colors.deepPurple,
+                  color: AppColors.primary,
                 ),
               ),
               TextButton(
                 onPressed: () {
                   Navigator.push(
                     context,
-                    MaterialPageRoute(builder: (_) => TeacherHomeworkPage()),
+                    MaterialPageRoute(
+                      builder: (_) => const TeacherHomeworkPage(),
+                    ),
                   );
                 },
                 child: const Text("View All"),
@@ -62,26 +65,44 @@ class TeacherRecentHomeworks extends StatelessWidget {
                   itemCount: limitedHomeworks.length,
                   itemBuilder: (context, index) {
                     final hw = limitedHomeworks[index];
+
                     return ListTile(
-                      leading: const Icon(Icons.book, color: Colors.deepPurple),
+                      leading: const Icon(Icons.book, color: AppColors.primary),
                       title: Text(hw['HomeworkTitle'] ?? ''),
                       subtitle: Text(
                         "Submission: ${formatDate(hw['SubmissionDate'])}",
                       ),
-
                       trailing: hw['Attachment'] != null
                           ? IconButton(
                               icon: const Icon(
                                 Icons.download,
-                                color: Colors.deepPurple,
+                                color: AppColors.primary,
                               ),
-                              onPressed: () async {
+                              onPressed: () {
                                 final attachment = hw['Attachment'];
-                                final fileUrl =
-                                    'https://rmps.apppro.in/$attachment';
-                                final fileName = fileUrl.split('/').last;
 
-                                await downloadFile(context, fileUrl, fileName);
+                                if (attachment == null ||
+                                    attachment.toString().isEmpty) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text("Attachment not available"),
+                                    ),
+                                  );
+                                  return;
+                                }
+
+                                // ✅ Teacher homework FINAL S3 URL
+                                final String fileUrl =
+                                    attachment.toString().startsWith('http')
+                                    ? attachment.toString()
+                                    : 'https://s3.ap-south-1.amazonaws.com/'
+                                          'school.edusathi.in/homeworks/$attachment';
+
+                                debugPrint(
+                                  "📎 TEACHER HW DOWNLOAD URL: $fileUrl",
+                                );
+
+                                _downloadFile(context, fileUrl);
                               },
                             )
                           : null,
@@ -102,42 +123,68 @@ class TeacherRecentHomeworks extends StatelessWidget {
     );
   }
 
-  Future<void> downloadFile(
-    BuildContext context,
-    String url,
-    String fileName,
-  ) async {
-    try {
-      final response = await http.get(Uri.parse(url));
+  // ---------------- SAFE FILE DOWNLOAD ----------------
+  Future<void> _downloadFile(BuildContext context, String url) async {
+    if (url.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Attachment not available")));
+      return;
+    }
 
-      if (response.statusCode == 200) {
-        // ✅ App private directory (Google-safe)
+    try {
+      debugPrint("⬇️ Downloading: $url");
+
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
+        throw Exception("Failed to download file");
+      }
+
+      final fileName = Uri.parse(url).pathSegments.last;
+
+      // ================= ANDROID =================
+      if (Platform.isAndroid) {
+        // ✅ Real user-visible Downloads folder
+        final downloadsDir = Directory('/storage/emulated/0/Download');
+        final filePath = '${downloadsDir.path}/$fileName';
+
+        final file = File(filePath);
+        await file.writeAsBytes(response.bodyBytes, flush: true);
+
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("File saved to Downloads folder")),
+        );
+      }
+
+      // ================= iOS =================
+      if (Platform.isIOS) {
         final dir = await getApplicationDocumentsDirectory();
         final filePath = '${dir.path}/$fileName';
 
         final file = File(filePath);
-        await file.writeAsBytes(response.bodyBytes);
+        await file.writeAsBytes(response.bodyBytes, flush: true);
 
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text("📥 File downloaded")));
-
-        await OpenFile.open(filePath);
-      } else {
-        throw Exception('Download failed');
+        if (!context.mounted) return;
+        await OpenFile.open(filePath); // Files app
       }
     } catch (e) {
+      debugPrint("❌ Teacher HW download error: $e");
+      if (!context.mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text("❌ Download failed")));
+      ).showSnackBar(const SnackBar(content: Text("Download failed")));
     }
   }
 
+  // ---------------- DATE FORMAT ----------------
   String formatDate(String? date) {
     if (date == null || date.isEmpty) return "";
     try {
       final parsedDate = DateTime.parse(date);
-      return "${parsedDate.day.toString().padLeft(2, '0')}-${parsedDate.month.toString().padLeft(2, '0')}-${parsedDate.year}";
+      return "${parsedDate.day.toString().padLeft(2, '0')}-"
+          "${parsedDate.month.toString().padLeft(2, '0')}-"
+          "${parsedDate.year}";
     } catch (_) {
       return date;
     }

@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'package:raj_modern_public_school/login_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:raj_modern_public_school/api_service.dart';
+import 'package:raj_modern_public_school/main.dart';
 import 'package:raj_modern_public_school/payment/payment_teacher_screen.dart';
 import 'package:raj_modern_public_school/teacher/complaint_teacher/teacher_complaint_list_page.dart';
 import 'package:raj_modern_public_school/teacher/student_list.dart';
@@ -18,11 +18,15 @@ class TeacherDashboardScreen extends StatefulWidget {
   State<TeacherDashboardScreen> createState() => _TeacherDashboardScreenState();
 }
 
-class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
+class _TeacherDashboardScreenState extends State<TeacherDashboardScreen>
+    with RouteAware {
   bool isLoading = true;
+  bool isRefreshing = false;
+
   int students = 0;
   int complaints = 0;
   int payments = 0;
+
   String schoolName = '';
   String teacherPhoto = '';
 
@@ -30,67 +34,70 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
   List<Map<String, dynamic>> homeworks = [];
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    routeObserver.subscribe(this, ModalRoute.of(context)! as PageRoute);
+  }
+
+  @override
+  void dispose() {
+    routeObserver.unsubscribe(this);
+    super.dispose();
+  }
+
+  @override
+  void didPopNext() {
+    _refreshDashboard();
+  }
+
   @override
   void initState() {
     super.initState();
-    loadTeacherInfo();
-    fetchDashboardData().then((_) {
-      fetchTeacherHomeworks(); // Add this
+    _refreshDashboard(); // first time
+  }
+
+  Future<void> _refreshDashboard() async {
+    if (!mounted) return;
+
+    if (!isLoading) {
+      // back / refresh case
+      setState(() => isRefreshing = true);
+    }
+
+    await loadTeacherInfo();
+    await fetchDashboardData();
+    await fetchTeacherHomeworks();
+
+    if (!mounted) return;
+
+    setState(() {
+      isLoading = false;
+      isRefreshing = false;
     });
   }
 
+  // ---------------- TEACHER INFO ----------------
   Future<void> loadTeacherInfo() async {
     final prefs = await SharedPreferences.getInstance();
+
+    if (!mounted) return;
+
     setState(() {
       schoolName = prefs.getString('school_name') ?? '';
       teacherPhoto = prefs.getString('teacher_photo') ?? '';
     });
   }
 
-  Future<void> fetchTeacherHomeworks() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token') ?? '';
-
-    final response = await http.post(
-      Uri.parse('https://rmps.apppro.in/api/teacher/homework'),
-      headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
-    );
-    print("🪪 Token being used: $token");
-
-    if (response.statusCode == 200) {
-      final List<dynamic> data = jsonDecode(response.body);
-
-      // 🔍 Add these for debugging:
-      print("📥 API raw response: ${response.body}");
-      print("✅ Parsed data: $data");
-
-      setState(() {
-        homeworks = List<Map<String, dynamic>>.from(data);
-
-        // 🔍 Log what's being saved
-        print("📝 Homework list set in state: $homeworks");
-      });
-    } else {
-      print('❌ Teacher Homework API failed: ${response.statusCode}');
-    }
-  }
-
+  // ---------------- DASHBOARD DATA ----------------
   Future<void> fetchDashboardData() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token') ?? '';
+    try {
+      final response = await ApiService.post(context, '/teacher/dashboard');
 
-    final response = await http.post(
-      Uri.parse('https://rmps.apppro.in/api/teacher/dashboard'),
-      headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
-    );
-    print("🔍 Raw Response Body:");
+      if (response == null) return;
 
-    print(response.body);
-
-    if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
-      print("📦 Decoded Data:");
-      print(data);
+
+      if (!mounted) return;
 
       setState(() {
         students = data['students'] ?? 0;
@@ -103,35 +110,40 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
           'half_day': data['attendances']?['half_day'] ?? 0,
           'working_days': data['attendances']?['working_days'] ?? 0,
         };
-        isLoading = false;
       });
-    } else {
-      setState(() => isLoading = false);
-        if (response.statusCode == 401) {
-    
-      await prefs.clear();
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (_) => LoginPage()),
-        (route) => false,
-      );
-
-      return;
-    }
-      print('Dashboard API error: ${response.statusCode}');
+    } catch (_) {
+      // silent
     }
   }
 
+  // ---------------- HOMEWORK ----------------
+  Future<void> fetchTeacherHomeworks() async {
+    try {
+      final response = await ApiService.post(context, '/teacher/homework');
+
+      if (response == null) return;
+
+      final decoded = jsonDecode(response.body);
+      if (decoded is List && mounted) {
+        setState(() {
+          homeworks = List<Map<String, dynamic>>.from(decoded);
+        });
+      }
+    } catch (_) {
+      // silent
+    }
+  }
+
+  // ---------------- UI ----------------
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       drawer: TeacherSidebarMenu(),
       appBar: AppBar(
         iconTheme: const IconThemeData(color: Colors.white),
-        backgroundColor: Colors.deepPurple,
+        backgroundColor: AppColors.primary,
         titleSpacing: 0,
         title: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Expanded(
               child: Text(
@@ -147,95 +159,95 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
                     radius: 15,
                   )
                 : const CircleAvatar(
-                    backgroundImage: AssetImage('assets/images/logo_new.png'),
+                    backgroundImage: AssetImage(AppAssets.logo_new),
                     radius: 15,
                   ),
             const SizedBox(width: 15),
           ],
         ),
       ),
-
       body: isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      GestureDetector(
-                        child: DashboardCard(
-                          title: 'Students',
-                          value: students.toString(),
-                          borderColor: Colors.blue,
-                          backgroundColor: const Color(0xFFE3F2FD),
-                          textColor: Colors.blue,
-                        ),
-                        onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => StudentListPage()),
-                        ),
-                      ),
-                      GestureDetector(
-                        child: DashboardCard(
-                          title: 'Payments',
-                          value: '$payments',
-                          borderColor: Colors.green,
-                          backgroundColor: const Color(0xFFE8F5E9),
-                          textColor: Colors.green,
-                        ),
-                        onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => PaymentTeacherScreen(),
-                          ),
-                        ),
-                      ),
-                      GestureDetector(
-                        child: DashboardCard(
-                          title: 'Complaints',
-                          value: complaints.toString(),
-                          borderColor: Colors.red,
-                          backgroundColor: const Color(0xFFFFEBEE),
-                          textColor: Colors.red,
-                        ),
-                        onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => TeacherComplaintListPage(),
-                          ),
-                        ),
-                      ),
-                    ],
+          ? const Center(
+              child: CircularProgressIndicator(color: AppColors.primary),
+            )
+          : Column(
+              children: [
+                if (isRefreshing)
+                  const LinearProgressIndicator(
+                    minHeight: 3,
+                    color: AppColors.primary,
                   ),
-                  const SizedBox(height: 30),
-                  Container(
-                    height: 230,
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.deepPurple.shade100),
-                      boxShadow: [
-                        BoxShadow(color: Colors.grey.shade200, blurRadius: 6),
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: [
+                            GestureDetector(
+                              onTap: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => StudentListPage(),
+                                ),
+                              ),
+                              child: DashboardCard(
+                                title: 'Students',
+                                value: students.toString(),
+                                borderColor: Colors.blue,
+                                backgroundColor: const Color(0xFFE3F2FD),
+                                textColor: Colors.blue,
+                              ),
+                            ),
+                            GestureDetector(
+                              onTap: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => PaymentTeacherScreen(),
+                                ),
+                              ),
+                              child: DashboardCard(
+                                title: 'Payments',
+                                value: payments.toString(),
+                                borderColor: Colors.green,
+                                backgroundColor: const Color(0xFFE8F5E9),
+                                textColor: Colors.green,
+                              ),
+                            ),
+                            GestureDetector(
+                              onTap: () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => TeacherComplaintListPage(),
+                                ),
+                              ),
+                              child: DashboardCard(
+                                title: 'Complaints',
+                                value: complaints.toString(),
+                                borderColor: Colors.red,
+                                backgroundColor: const Color(0xFFFFEBEE),
+                                textColor: Colors.red,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 30),
+                        AttendancePieChart(
+                          present: attendance['present'] ?? 0,
+                          absent: attendance['absent'] ?? 0,
+                          leave: attendance['leave'] ?? 0,
+                          halfDay: attendance['half_day'] ?? 0,
+                          workingDays: attendance['working_days'] ?? 0,
+                        ),
+                        const SizedBox(height: 20),
+                        TeacherRecentHomeworks(homeworks: homeworks),
                       ],
                     ),
-                    child: AttendancePieChart(
-                      present: attendance['present'] ?? 0,
-                      absent: attendance['absent'] ?? 0,
-                      leave: attendance['leave'] ?? 0,
-                      halfDay: attendance['half_day'] ?? 0,
-                      workingDays: attendance['working_days'] ?? 0,
-                    ),
                   ),
-                  const SizedBox(height: 20),
-                  TeacherRecentHomeworks(homeworks: homeworks),
-
-                  const SizedBox(height: 20),
-                ],
-              ),
+                ),
+              ],
             ),
     );
   }
@@ -363,7 +375,7 @@ class AttendancePieChart extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.bold,
-                    color: Colors.deepPurple,
+                    color: AppColors.primary,
                   ),
                 ),
               ],

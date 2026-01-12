@@ -4,12 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-// import 'package:path_provider/path_provider.dart';
-// import 'package:permission_handler/permission_handler.dart';
 import 'package:open_file/open_file.dart';
+import 'package:raj_modern_public_school/api_service.dart';
 import 'package:raj_modern_public_school/homework/teacher_add_homework_page.dart';
-// import 'package:prime_school/homework/teacher_add_homework_page.dart';
 import 'teacher_homework_detail_page.dart';
 
 class TeacherHomeworkPage extends StatefulWidget {
@@ -29,74 +26,132 @@ class _TeacherHomeworkPageState extends State<TeacherHomeworkPage> {
     fetchHomeworks();
   }
 
+  // ---------------- FETCH HOMEWORKS ----------------
   Future<void> fetchHomeworks() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token') ?? '';
+    setState(() => isLoading = true);
 
-    final response = await http.post(
-      Uri.parse('https://rmps.apppro.in/api/teacher/homework'),
-      headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
-    );
+    try {
+      final response = await ApiService.post(
+        context,
+        '/teacher/homework',
+      );
 
-    if (response.statusCode == 200) {
-      final List<dynamic> data = jsonDecode(response.body);
-      setState(() {
-        homeworks = List<Map<String, dynamic>>.from(data);
-        isLoading = false;
-      });
-    } else {
+      // 🔐 token expired → AuthHelper already logout kara dega
+      if (response == null || !mounted) {
+        if (mounted) setState(() => isLoading = false);
+        return;
+      }
+
+      debugPrint("🟢 HOMEWORK STATUS: ${response.statusCode}");
+      debugPrint("📦 HOMEWORK BODY: ${response.body}");
+
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+
+        setState(() {
+          if (decoded is List) {
+            homeworks = List<Map<String, dynamic>>.from(decoded);
+          } else {
+            homeworks = [];
+          }
+          isLoading = false;
+        });
+      } else {
+        setState(() => isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Failed to load homeworks (${response.statusCode})"),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint("❌ fetchHomeworks error: $e");
+      if (!mounted) return;
       setState(() => isLoading = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Error loading homework")));
     }
   }
 
-  String formatDate(String date) {
+  // ---------------- DATE FORMAT ----------------
+  String formatDate(String? date) {
+    if (date == null || date.isEmpty) return '';
     try {
       return DateFormat('dd-MM-yyyy').format(DateTime.parse(date));
-    } catch (e) {
+    } catch (_) {
       return date;
     }
   }
 
-  Future<void> downloadFile(BuildContext context, String filePath) async {
-    try {
-      final fullUrl = filePath.startsWith('http')
-          ? filePath
-          : 'https://rmps.apppro.in/$filePath';
+  // ---------------- FILE DOWNLOAD (IOS + ANDROID SAFE) ----------------
+ Future<void> downloadFile(BuildContext context, String attachmentPath) async {
+  try {
+    final String fileUrl = attachmentPath.startsWith('http')
+        ? attachmentPath
+        : 'https://s3.ap-south-1.amazonaws.com/'
+            'school.edusathi.in/homeworks/$attachmentPath';
 
-      final response = await http.get(Uri.parse(fullUrl));
-      if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
-        throw Exception("Failed to download file.");
-      }
+    debugPrint("⬇️ Download URL: $fileUrl");
 
-      // ✅ Use app-specific storage
-      final dir = await getApplicationDocumentsDirectory();
-      final fileName = filePath.split('/').last;
-      final file = File('${dir.path}/$fileName');
+    final response = await http
+        .get(Uri.parse(fileUrl))
+        .timeout(const Duration(seconds: 30));
+
+    if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
+      throw Exception("Download failed");
+    }
+
+    final String fileName = Uri.parse(fileUrl).pathSegments.last;
+
+    // ================= ANDROID =================
+    if (Platform.isAndroid) {
+      // ✅ REAL Downloads folder (user visible)
+      final Directory downloadsDir =
+          Directory('/storage/emulated/0/Download');
+
+      final String filePath = '${downloadsDir.path}/$fileName';
+      final File file = File(filePath);
 
       await file.writeAsBytes(response.bodyBytes, flush: true);
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text("Downloaded to ${file.path}")));
-
-      await OpenFile.open(file.path);
-    } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text("Download error: $e")));
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("📥 File saved to Downloads folder")),
+      );
     }
-  }
 
+    // ================= iOS =================
+    if (Platform.isIOS) {
+      final Directory dir = await getApplicationDocumentsDirectory();
+      final String filePath = '${dir.path}/$fileName';
+
+      final File file = File(filePath);
+      await file.writeAsBytes(response.bodyBytes, flush: true);
+
+      if (!context.mounted) return;
+      await OpenFile.open(filePath); // Files app
+    }
+  } catch (e) {
+    debugPrint("❌ Download error: $e");
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Download failed")),
+    );
+  }
+}
+
+  // ---------------- UI ----------------
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('All Homeworks'),
-        backgroundColor: Colors.deepPurple,
+        backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
       ),
       body: isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: CircularProgressIndicator(color: AppColors.primary),)
           : homeworks.isEmpty
           ? const Center(child: Text('No homework found.'))
           : ListView.builder(
@@ -131,10 +186,9 @@ class _TeacherHomeworkPageState extends State<TeacherHomeworkPage> {
                             style: const TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.bold,
-                              color: Colors.deepPurple,
+                              color: AppColors.primary,
                             ),
                           ),
-
                           const SizedBox(height: 6),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -143,34 +197,12 @@ class _TeacherHomeworkPageState extends State<TeacherHomeworkPage> {
                                 "📅 ${formatDate(hw['WorkDate'])}",
                                 style: const TextStyle(fontSize: 13),
                               ),
-
                               Text(
                                 "Submission: ${formatDate(hw['SubmissionDate'])}",
                                 style: const TextStyle(fontSize: 13),
                               ),
                             ],
                           ),
-                          SizedBox(height: 3),
-                          RichText(
-                            text: TextSpan(
-                              style: const TextStyle(
-                                color: Colors.deepPurple,
-                                fontSize: 14,
-                              ),
-                              children: [
-                                TextSpan(
-                                  text: "Class:",
-                                  style: TextStyle(fontWeight: FontWeight.bold),
-                                ),
-                                TextSpan(
-                                  text:
-                                      " ${hw['Class'] ?? ''} (${hw['Section'] ?? ''})",
-                                  style: TextStyle(color: Colors.deepPurple),
-                                ),
-                              ],
-                            ),
-                          ),
-
                           const SizedBox(height: 6),
                           if ((hw['Remark'] ?? '').isNotEmpty)
                             Text(
@@ -183,10 +215,9 @@ class _TeacherHomeworkPageState extends State<TeacherHomeworkPage> {
                               IconButton(
                                 icon: const Icon(
                                   Icons.edit,
-                                  color: Colors.deepPurple,
+                                  color: AppColors.primary,
                                 ),
                                 onPressed: () async {
-                                  // Edit page par navigate karein aur homework object pass karein
                                   final result = await Navigator.push(
                                     context,
                                     MaterialPageRoute(
@@ -195,9 +226,7 @@ class _TeacherHomeworkPageState extends State<TeacherHomeworkPage> {
                                       ),
                                     ),
                                   );
-
                                   if (result == true) {
-                                   
                                     fetchHomeworks();
                                   }
                                 },
@@ -206,7 +235,7 @@ class _TeacherHomeworkPageState extends State<TeacherHomeworkPage> {
                                 IconButton(
                                   icon: const Icon(
                                     Icons.download_rounded,
-                                    color: Colors.deepPurple,
+                                    color: AppColors.primary,
                                   ),
                                   onPressed: () {
                                     downloadFile(context, attachmentUrl);
@@ -222,16 +251,14 @@ class _TeacherHomeworkPageState extends State<TeacherHomeworkPage> {
               },
             ),
       floatingActionButton: FloatingActionButton(
-        backgroundColor: Colors.deepPurple,
+        backgroundColor: AppColors.primary,
         child: const Icon(Icons.add, color: Colors.white),
         onPressed: () async {
           final result = await Navigator.push(
             context,
             MaterialPageRoute(builder: (_) => const TeacherAddHomeworkPage()),
           );
-
           if (result == true) {
-            // Trigger refresh of homework list
             fetchHomeworks();
           }
         },

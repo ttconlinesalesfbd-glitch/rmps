@@ -4,9 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-
 import 'package:open_file/open_file.dart';
+import 'package:raj_modern_public_school/api_service.dart';
 import 'package:raj_modern_public_school/homework/homework_detail_page.dart';
 
 class HomeworkPage extends StatefulWidget {
@@ -19,6 +18,7 @@ class HomeworkPage extends StatefulWidget {
 class _HomeworkPageState extends State<HomeworkPage> {
   List<dynamic> homeworks = [];
   bool isLoading = true;
+  bool _isDownloading = false; // 🔒 download lock
 
   @override
   void initState() {
@@ -26,37 +26,35 @@ class _HomeworkPageState extends State<HomeworkPage> {
     fetchHomework();
   }
 
+  // =========================
+  // 📡 FETCH HOMEWORK
+  // =========================
   Future<void> fetchHomework() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('token') ?? '';
+      final response = await ApiService.post(context, '/student/homework');
 
-      final url = Uri.parse('https://rmps.apppro.in/api/student/homework');
-
-      final response = await http.post(
-        url,
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({}),
-      );
-
-      print('📡 Status Code: ${response.statusCode}');
-      print('📄 Response: ${response.body}');
+      // 🔴 Token expired / auto logout
+      if (response == null) {
+        if (!mounted) return;
+        setState(() => isLoading = false);
+        return;
+      }
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+
+        if (!mounted) return;
         setState(() {
           homeworks = data;
           isLoading = false;
         });
       } else {
-        throw Exception('Failed to load homework');
+        throw Exception("Failed to load homework");
       }
     } catch (e) {
-      print('❌ Error: $e');
+      debugPrint("❌ fetchHomework error: $e");
+
+      if (!mounted) return;
       setState(() {
         isLoading = false;
         homeworks = [];
@@ -64,56 +62,90 @@ class _HomeworkPageState extends State<HomeworkPage> {
     }
   }
 
+  // =========================
+  // 📅 DATE FORMAT
+  // =========================
   String formatDate(String? dateStr) {
-    if (dateStr == null) return '';
+    if (dateStr == null || dateStr.isEmpty) return '';
     try {
-      final date = DateTime.parse(dateStr);
-      return DateFormat('dd-MM-yyyy').format(date);
-    } catch (e) {
+      return DateFormat('dd-MM-yyyy').format(DateTime.parse(dateStr));
+    } catch (_) {
       return dateStr;
     }
   }
 
-  Future<void> downloadFile(BuildContext context, String filePath) async {
+  // =========================
+  // 📥 SAFE FILE DOWNLOAD
+  // =========================
+  Future<void> downloadFile(BuildContext context, String attachment) async {
+    if (_isDownloading) return;
+    _isDownloading = true;
+
     try {
-      final fullUrl = filePath.startsWith('http')
-          ? filePath
-          : 'https://rmps.apppro.in/$filePath';
+      // ✅ Safe URL resolve (no hardcode)
+      final fullUrl = attachment.startsWith('http')
+          ? attachment
+          : ApiService.homeworkAttachment(attachment);
+
+      final fileName = fullUrl.split('/').last;
+
+      debugPrint("⬇️ Download URL: $fullUrl");
 
       final response = await http.get(Uri.parse(fullUrl));
       if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
-        throw Exception("Failed to download file.");
+        throw Exception("Download failed");
       }
 
-      // ✅ Use app-specific storage
-      final dir = await getApplicationDocumentsDirectory();
-      final fileName = filePath.split('/').last;
-      final file = File('${dir.path}/$fileName');
+      // ================= ANDROID =================
+      if (Platform.isAndroid) {
+        final downloadsDir = Directory('/storage/emulated/0/Download');
+        final file = File('${downloadsDir.path}/$fileName');
 
-      await file.writeAsBytes(response.bodyBytes, flush: true);
+        await file.writeAsBytes(response.bodyBytes, flush: true);
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text("Downloaded to ${file.path}")));
+        // ✅ PREVIEW OPEN
+        await OpenFile.open(file.path);
 
-      await OpenFile.open(file.path);
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("📥 Downloaded & preview opened")),
+        );
+      }
+
+      // ================= iOS =================
+      if (Platform.isIOS) {
+        final dir = await getApplicationDocumentsDirectory();
+        final file = File('${dir.path}/$fileName');
+
+        await file.writeAsBytes(response.bodyBytes, flush: true);
+
+        // ✅ PREVIEW OPEN
+        await OpenFile.open(file.path);
+      }
     } catch (e) {
+      debugPrint("❌ download error: $e");
+      if (!context.mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text("Download error: $e")));
+      ).showSnackBar(const SnackBar(content: Text("❌ Download failed")));
+    } finally {
+      _isDownloading = false;
     }
   }
 
+  // =========================
+  // 🧱 UI (UNCHANGED)
+  // =========================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Homework', style: TextStyle(color: Colors.white)),
-        backgroundColor: Colors.deepPurple,
-        iconTheme: IconThemeData(color: Colors.white),
+        title: const Text('Homeworks', style: TextStyle(color: Colors.white)),
+        backgroundColor: AppColors.primary,
+        iconTheme: const IconThemeData(color: Colors.white),
       ),
       body: isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: CircularProgressIndicator(color: AppColors.primary),)
           : homeworks.isEmpty
           ? const Center(child: Text("No homework available"))
           : ListView.builder(
@@ -148,7 +180,7 @@ class _HomeworkPageState extends State<HomeworkPage> {
                             style: const TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.bold,
-                              color: Colors.deepPurple,
+                              color: AppColors.primary,
                             ),
                           ),
                           const SizedBox(height: 6),
@@ -182,13 +214,10 @@ class _HomeworkPageState extends State<HomeworkPage> {
                               child: IconButton(
                                 icon: const Icon(
                                   Icons.download_rounded,
-                                  color: Colors.deepPurple,
+                                  color: AppColors.primary,
                                 ),
                                 onPressed: () {
-                                  downloadFile(
-                                    context,
-                                    attachmentUrl,
-                                  ); // ✅ Correct
+                                  downloadFile(context, attachmentUrl);
                                 },
                               ),
                             ),

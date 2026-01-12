@@ -1,10 +1,10 @@
 import 'dart:convert';
-import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:open_file/open_file.dart';
+import 'package:raj_modern_public_school/api_service.dart';
 
 class PaymentPage extends StatefulWidget {
   const PaymentPage({super.key});
@@ -14,7 +14,6 @@ class PaymentPage extends StatefulWidget {
 }
 
 class _PaymentPageState extends State<PaymentPage> {
-  final String apiUrl = 'https://rmps.apppro.in/api/student/payment';
   List<dynamic> payments = [];
   bool isLoading = true;
 
@@ -24,95 +23,128 @@ class _PaymentPageState extends State<PaymentPage> {
     fetchPayments();
   }
 
+  // ---------------- FETCH PAYMENTS ----------------
   Future<void> fetchPayments() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token') ?? '';
+    if (!mounted) return;
 
-    final response = await http.post(
-      Uri.parse(apiUrl),
-      headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
-    );
+    setState(() => isLoading = true);
 
-    print("📥 Payment API Response: ${response.body}");
+    try {
+      final response = await ApiService.post(context, "/student/payment");
 
-    if (response.statusCode == 200) {
-      setState(() {
-        payments = jsonDecode(response.body);
-        isLoading = false;
-      });
-    } else {
+      // 🔐 token invalid → auto logout already handled
+      if (response == null) {
+        if (!mounted) return;
+        setState(() {
+          payments = [];
+          isLoading = false;
+        });
+        return;
+      }
+
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+
+        if (!mounted) return;
+        setState(() {
+          payments = decoded is List ? decoded : [];
+          isLoading = false;
+        });
+      } else {
+        if (!mounted) return;
+        setState(() {
+          payments = [];
+          isLoading = false;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Failed to load payment records")),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+
       setState(() {
         payments = [];
         isLoading = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Failed to load payment records")),
-      );
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("Network error: $e")));
     }
   }
 
-
-
-Future<void> downloadReceipt(dynamic paymentId) async {
-  try {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token') ?? '';
-
-    final response = await http.post(
-      Uri.parse('https://rmps.apppro.in/api/student/receipt'),
-      headers: {
-        'Authorization': 'Bearer $token',
-        'Accept': 'application/json',
-      },
-      body: {'payment_id': paymentId.toString()},
-    );
-
-    final data = jsonDecode(response.body);
-
-    if (response.statusCode == 200 && data['status'] == true) {
-      final url = data['url'];
-      final filename = url.split('/').last;
-
-      // ✅ App private directory (NO permission needed)
-      final dir = await getApplicationDocumentsDirectory();
-      final filePath = '${dir.path}/$filename';
-
-      final pdfResponse = await http.get(Uri.parse(url));
-      final file = File(filePath);
-      await file.writeAsBytes(pdfResponse.bodyBytes);
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Receipt downloaded')),
+  // ---------------- DOWNLOAD RECEIPT ----------------
+  Future<void> downloadReceipt(dynamic paymentId) async {
+    try {
+      // 🔹 Step 1: Get receipt URL
+      final response = await ApiService.post(
+        context,
+        "/student/receipt",
+        body: {'payment_id': paymentId.toString()},
       );
 
-      await OpenFile.open(filePath);
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(data['message'] ?? 'Download failed')),
-      );
+      if (response == null || response.statusCode != 200) {
+        throw Exception("Failed to fetch receipt");
+      }
+
+      final data = jsonDecode(response.body);
+
+      if (data['status'] != true || data['url'] == null) {
+        throw Exception(data['message'] ?? 'Invalid receipt response');
+      }
+
+      final String url = data['url'];
+      final String fileName = url.split('/').last;
+
+      final dio = Dio();
+
+      // ================= ANDROID =================
+      if (Platform.isAndroid) {
+        // ✅ REAL Downloads folder (visible)
+        final downloadsDir = Directory('/storage/emulated/0/Download');
+        final filePath = '${downloadsDir.path}/$fileName';
+
+        await dio.download(url, filePath);
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Receipt saved to Downloads folder")),
+        );
+      }
+
+      // ================= iOS =================
+      if (Platform.isIOS) {
+        final dir = await getApplicationDocumentsDirectory();
+        final filePath = '${dir.path}/$fileName';
+
+        await dio.download(url, filePath);
+
+        if (!mounted) return;
+        await OpenFile.open(filePath); // Files app
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Receipt download failed")));
     }
-  } catch (e) {
-    debugPrint("❌ Download error: $e");
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Error downloading receipt')),
-    );
   }
-}
 
-
-
+  // ---------------- UI (UNCHANGED) ----------------
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text("My Payments", style: TextStyle(color: Colors.white)),
-        backgroundColor: Colors.deepPurple,
+        backgroundColor: AppColors.primary,
         centerTitle: true,
-        iconTheme: IconThemeData(color: Colors.white),
+        iconTheme: const IconThemeData(color: Colors.white),
       ),
       body: isLoading
           ? const Center(
-              child: CircularProgressIndicator(color: Colors.deepPurple),
+              child: CircularProgressIndicator(color: AppColors.primary),
             )
           : ListView.builder(
               itemCount: payments.length,
@@ -163,7 +195,6 @@ Future<void> downloadReceipt(dynamic paymentId) async {
                                   Text(
                                     "📅 ${payment['Date']}",
                                     style: const TextStyle(
-                                      color: Colors.black,
                                       fontWeight: FontWeight.bold,
                                       fontSize: 18,
                                     ),
@@ -193,7 +224,6 @@ Future<void> downloadReceipt(dynamic paymentId) async {
                                     "Remark",
                                     payment['Remark'] ?? '-',
                                   ),
-                                  const SizedBox(height: 8),
                                 ],
                               ),
                             ),
@@ -203,11 +233,9 @@ Future<void> downloadReceipt(dynamic paymentId) async {
                               child: IconButton(
                                 icon: const Icon(
                                   Icons.download,
-                                  color: Colors.deepPurple,
+                                  color: AppColors.primary,
                                 ),
-                                onPressed: () {
-                                  downloadReceipt(payment['id']);
-                                },
+                                onPressed: () => downloadReceipt(payment['id']),
                               ),
                             ),
                           ],

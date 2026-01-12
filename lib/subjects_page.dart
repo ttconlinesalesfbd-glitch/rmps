@@ -1,7 +1,7 @@
-import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'package:shared_preferences/shared_preferences.dart';
+
+import 'package:flutter/material.dart';
+import 'package:raj_modern_public_school/api_service.dart';
 
 class SubjectsPage extends StatefulWidget {
   @override
@@ -20,48 +20,39 @@ class _SubjectsPageState extends State<SubjectsPage> {
 
   Future<void> fetchSubjects() async {
     try {
-      SharedPreferences prefs = await SharedPreferences.getInstance();
-      String? token = prefs.getString('token');
-      print("Token: $token");
-
-      final response = await http.post(
-        Uri.parse('https://rmps.apppro.in/api/student/subject'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Accept': 'application/json',
-        },
+      final response = await ApiService.post(
+        context,
+        "/student/subject", // ✅ only endpoint
       );
 
-      print("Status Code: ${response.statusCode}");
-      print("Body: ${response.body}");
+      if (!mounted) return;
+
+      if (response == null) {
+        setState(() => isLoading = false);
+        return;
+      }
 
       if (response.statusCode == 200) {
-        final data = json.decode(response.body);
+        final data = jsonDecode(response.body);
 
-        // Check if response is list or has 'data' key
-        if (data is List) {
-          setState(() {
+        setState(() {
+          if (data is List) {
             subjects = data;
-            isLoading = false;
-          });
-        } else if (data is Map && data.containsKey('data')) {
-          setState(() {
-            subjects = data['data'];
-            isLoading = false;
-          });
-        } else {
-          setState(() => isLoading = false);
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Unexpected response format')));
-        }
+          } else if (data is Map && data.containsKey('data')) {
+            subjects = data['data'] ?? [];
+          } else {
+            subjects = [];
+          }
+          isLoading = false;
+        });
       } else {
         setState(() => isLoading = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Failed to load subjects')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to load subjects')),
+        );
       }
     } catch (e) {
+      if (!mounted) return;
       setState(() => isLoading = false);
       ScaffoldMessenger.of(
         context,
@@ -74,12 +65,14 @@ class _SubjectsPageState extends State<SubjectsPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Subjects', style: TextStyle(color: Colors.white)),
-        backgroundColor: Colors.deepPurple,
+        backgroundColor: AppColors.primary,
         centerTitle: true,
         leading: const BackButton(color: Colors.white),
       ),
       body: isLoading
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(
+              child: CircularProgressIndicator(color: AppColors.primary),
+            )
           : subjects.isEmpty
           ? const Center(child: Text("No subjects found."))
           : ListView.builder(
@@ -96,10 +89,10 @@ class _SubjectsPageState extends State<SubjectsPage> {
                   child: ListTile(
                     leading: const Icon(
                       Icons.book_outlined,
-                      color: Colors.deepPurple,
+                      color: AppColors.primary,
                     ),
                     title: Text(
-                      subject['Subject'] ?? '', 
+                      subject['Subject'] ?? '',
                       style: const TextStyle(fontWeight: FontWeight.bold),
                     ),
                   ),

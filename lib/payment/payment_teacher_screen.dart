@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:raj_modern_public_school/api_service.dart';
+
 
 class PaymentTeacherScreen extends StatefulWidget {
   const PaymentTeacherScreen({super.key});
@@ -11,7 +11,7 @@ class PaymentTeacherScreen extends StatefulWidget {
 }
 
 class _PaymentTeacherScreenState extends State<PaymentTeacherScreen> {
-  final String apiUrl = 'https://rmps.apppro.in/api/teacher/payment';
+
   List<dynamic> payments = [];
   bool isLoading = true;
 
@@ -21,35 +21,72 @@ class _PaymentTeacherScreenState extends State<PaymentTeacherScreen> {
     fetchPayments();
   }
 
+  // ---------------- FETCH PAYMENTS ----------------
   Future<void> fetchPayments() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token') ?? '';
+    if (!mounted) return;
 
-    final response = await http.post(
-      Uri.parse(apiUrl),
-      headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
-    );
+    setState(() => isLoading = true);
 
-    if (response.statusCode == 200) {
-      setState(() {
-        payments = jsonDecode(response.body);
-        isLoading = false;
-      });
-    } else {
+    try {
+      final response = await ApiService.post(
+        context,
+       "/teacher/payment" , // already full URL
+      );
+
+      // 🔐 If token invalid → auto logout already handled
+      if (response == null) {
+        if (!mounted) return;
+        setState(() {
+          payments = [];
+          isLoading = false;
+        });
+        return;
+      }
+
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+
+        if (!mounted) return;
+        setState(() {
+          payments = decoded is List ? decoded : [];
+          isLoading = false;
+        });
+      } else {
+        if (!mounted) return;
+        setState(() {
+          payments = [];
+          isLoading = false;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Failed to load teacher payment records"),
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+
       setState(() {
         payments = [];
         isLoading = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Failed to load teacher payment records")),
-      );
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("Network error: $e")));
     }
   }
 
-  Color getBackgroundColor(String particular) {
-    return particular == "Employee Payment" ? Colors.green : Colors.red;
+  // ---------------- HELPERS ----------------
+  Color getBackgroundColor(String? particular) {
+    if (particular == "Employee Payment") {
+      return Colors.green;
+    }
+    return Colors.red;
   }
 
+  // ---------------- UI (UNCHANGED) ----------------
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -58,13 +95,13 @@ class _PaymentTeacherScreenState extends State<PaymentTeacherScreen> {
           "Teacher Payments",
           style: TextStyle(color: Colors.white),
         ),
-        backgroundColor: Colors.deepPurple,
+        backgroundColor: AppColors.primary,
         centerTitle: true,
         iconTheme: const IconThemeData(color: Colors.white),
       ),
       body: isLoading
           ? const Center(
-              child: CircularProgressIndicator(color: Colors.deepPurple),
+              child: CircularProgressIndicator(color: AppColors.primary),
             )
           : payments.isEmpty
           ? const Center(child: Text("No payments found."))
@@ -98,8 +135,11 @@ class _PaymentTeacherScreenState extends State<PaymentTeacherScreen> {
                         child: RotatedBox(
                           quarterTurns: -1,
                           child: Text(
-                            (payment['Particular']?.split(' ').last ?? ''),
-
+                            (payment['Particular']
+                                    ?.toString()
+                                    .split(' ')
+                                    .last ??
+                                ''),
                             textAlign: TextAlign.center,
                             style: const TextStyle(
                               color: Colors.white,
@@ -118,7 +158,6 @@ class _PaymentTeacherScreenState extends State<PaymentTeacherScreen> {
                               Text(
                                 "📅 ${payment['Date']}",
                                 style: const TextStyle(
-                                  color: Colors.black,
                                   fontWeight: FontWeight.bold,
                                   fontSize: 18,
                                 ),
@@ -128,11 +167,8 @@ class _PaymentTeacherScreenState extends State<PaymentTeacherScreen> {
                                 payment['Particular'] == "Employee Salary"
                                     ? "Amount"
                                     : "Received",
-                                payment['Particular'] == "Employee Payment"
-                                    ? (payment['Paid'] ?? '0')
-                                    : (payment['Paid'] ?? '0'),
+                                payment['Paid'] ?? '0',
                               ),
-
                               _buildDetailRow(
                                 "Pay Mode",
                                 payment['PayMode'] ?? '-',

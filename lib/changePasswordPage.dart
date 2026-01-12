@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:raj_modern_public_school/api_service.dart';
 
 class ChangePasswordPage extends StatefulWidget {
   const ChangePasswordPage({super.key});
@@ -18,68 +17,95 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
 
   bool isSubmitting = false;
 
-  Future<void> handleChangePassword() async {
-    if (_formKey.currentState!.validate()) {
-      if (currentController.text == newController.text) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("New password cannot be same as current password"),
-          ),
-        );
-        return;
-      }
+ Future<void> handleChangePassword() async {
+  if (!_formKey.currentState!.validate()) return;
 
-      final confirm = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text("Confirm Change"),
-          content: const Text("Are you sure you want to change your password?"),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text("Cancel"),
-            ),
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text("Yes"),
-            ),
-          ],
+  final currentPass = currentController.text.trim();
+  final newPass = newController.text.trim();
+  final confirmPass = confirmController.text.trim();
+
+  if (currentPass == newPass) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("New password cannot be same as current password"),
+      ),
+    );
+    return;
+  }
+
+  if (newPass != confirmPass) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("New password and confirm password do not match"),
+      ),
+    );
+    return;
+  }
+
+  final confirmed = await showDialog<bool>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => AlertDialog(
+      title: const Text("Confirm Change"),
+      content: const Text("Are you sure you want to change your password?"),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(false),
+          child: const Text("Cancel"),
+        ),
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: const Text("Yes"),
+        ),
+      ],
+    ),
+  );
+
+  if (confirmed != true) return;
+
+  if (!mounted) return;
+  setState(() => isSubmitting = true);
+
+  try {
+    final response = await ApiService.post(
+      context,
+      '/password',
+      body: {
+        'current_pass': currentPass,
+        'new_pass': newPass,
+      },
+    );
+
+    if (!mounted) return;
+    setState(() => isSubmitting = false);
+
+    // 🔐 Auto logout already handled inside AuthHelper
+    if (response == null) return;
+
+    final data = jsonDecode(response.body);
+
+    if (data['status'] == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Password changed successfully!")),
+      );
+      Navigator.pop(context);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(data['message'] ?? "Password change failed"),
         ),
       );
-
-      if (confirm != true) return;
-
-      setState(() => isSubmitting = true);
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('token') ?? '';
-
-      final response = await http.post(
-        Uri.parse('https://rmps.apppro.in/api/password'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Accept': 'application/json',
-        },
-        body: {
-          'current_pass': currentController.text.trim(),
-          'new_pass': newController.text.trim(),
-        },
-      );
-
-      setState(() => isSubmitting = false);
-
-      final data = jsonDecode(response.body);
-      if (data['status'] == true) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Password changed successfully!")),
-        );
-        Navigator.pop(context);
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(data['message'] ?? "Password change failed")),
-        );
-      }
     }
+  } catch (e) {
+    if (!mounted) return;
+    setState(() => isSubmitting = false);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text("Network error: $e")),
+    );
   }
+}
+
 
   @override
   void dispose() {
@@ -97,8 +123,8 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
           'Change Password',
           style: TextStyle(color: Colors.white),
         ),
-        iconTheme: IconThemeData(color: Colors.white),
-        backgroundColor: Colors.deepPurple,
+        iconTheme: const IconThemeData(color: Colors.white),
+        backgroundColor: AppColors.primary,
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -144,14 +170,15 @@ class _ChangePasswordPageState extends State<ChangePasswordPage> {
                 child: ElevatedButton(
                   onPressed: isSubmitting ? null : handleChangePassword,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.deepPurple,
+                    backgroundColor: AppColors.primary,
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
                   child: isSubmitting
                       ? const CircularProgressIndicator(color: Colors.white)
                       : const Text(
                           "Submit",
-                          style: TextStyle(fontSize: 16, color: Colors.white),
+                          style:
+                              TextStyle(fontSize: 16, color: Colors.white),
                         ),
                 ),
               ),

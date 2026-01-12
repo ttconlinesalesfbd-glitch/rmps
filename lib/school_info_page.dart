@@ -3,7 +3,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:raj_modern_public_school/api_service.dart';
+
 
 class SchoolInfoPage extends StatefulWidget {
   @override
@@ -17,14 +18,6 @@ class _SchoolInfoPageState extends State<SchoolInfoPage> {
   Map<String, String> schoolDetails = {};
   bool isLoading = true;
   bool isDownloading = false;
-  bool get isValidQrCode {
-    if (qrCode.isEmpty) return false;
-
-    return qrCode.startsWith('http') &&
-        (qrCode.endsWith('.png') ||
-            qrCode.endsWith('.jpg') ||
-            qrCode.endsWith('.jpeg'));
-  }
 
   @override
   void initState() {
@@ -33,18 +26,27 @@ class _SchoolInfoPageState extends State<SchoolInfoPage> {
   }
 
   Future<void> fetchSchoolInfo() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token') ?? '';
+    try {
+      final response = await ApiService.post(
+        context,
+        '/school',
+      );
 
-    final response = await http.post(
-      Uri.parse('https://rmps.apppro.in/api/school'),
-      headers: {'Authorization': 'Bearer $token', 'Accept': 'application/json'},
-    );
-    debugPrint("📡 STATUS CODE => ${response.statusCode}");
-    debugPrint("📡 RAW RESPONSE => ${response.body}");
+      if (response == null) {
+        // auto-logout already handled
+        if (mounted) setState(() => isLoading = false);
+        return;
+      }
 
-    if (response.statusCode == 200) {
+      if (response.statusCode != 200) {
+        debugPrint("❌ School API failed: ${response.statusCode}");
+        if (mounted) setState(() => isLoading = false);
+        return;
+      }
+
       final data = jsonDecode(response.body);
+
+      if (!mounted) return;
 
       setState(() {
         schoolLogo = data['SchoolLogo'] ?? '';
@@ -55,115 +57,142 @@ class _SchoolInfoPageState extends State<SchoolInfoPage> {
           "Website": data['Website'] ?? '',
           "Address": data['Address'] ?? '',
           "Principal": data["PrincipalName"] ?? '',
-          "Contact": data["ContactNo"].toString(),
+          "Contact": data["ContactNo"]?.toString() ?? '',
         };
         isLoading = false;
-
-        debugPrint("✅ STATE UPDATED");
-        debugPrint("➡️ schoolLogo (final) => $schoolLogo");
-        debugPrint("➡️ qrCode (final) => $qrCode");
       });
-    } else {
-      print("❌ School info fetch failed: ${response.statusCode}");
-      setState(() => isLoading = false);
+    } catch (e) {
+      debugPrint("❌ School info exception: $e");
+      if (mounted) setState(() => isLoading = false);
     }
   }
 
-  /// ✅ Downloads the QR Code safely without needing storage permissions
+  /// ✅ iOS + Android safe (no permission required)
   Future<void> downloadQrCode() async {
     if (qrCode.isEmpty) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text("QR code not available")));
+      ).showSnackBar(const SnackBar(content: Text("QR code not available")));
       return;
     }
 
     try {
       setState(() => isDownloading = true);
-      final response = await http.get(Uri.parse(qrCode));
-      if (response.statusCode == 200) {
-        final bytes = response.bodyBytes;
-        final directory = await getApplicationDocumentsDirectory();
-        final filePath =
-            '${directory.path}/School_QR_${DateTime.now().millisecondsSinceEpoch}.png';
-        print("📁 Saved Path: $filePath");
-        final file = File(filePath);
-        await file.writeAsBytes(bytes);
 
-        setState(() => isDownloading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("✅ QR Code saved to Documents folder")),
-        );
-      } else {
+      final normalizedUrl = qrCode.startsWith('http')
+          ? qrCode
+          : 'https://school.edusathi.in/$qrCode';
+
+      final response = await http.get(Uri.parse(normalizedUrl));
+      if (response.statusCode != 200 || response.bodyBytes.isEmpty) {
         throw Exception("Download failed");
       }
+
+      final fileName = 'School_QR_${DateTime.now().millisecondsSinceEpoch}.png';
+
+      // ================= ANDROID =================
+      if (Platform.isAndroid) {
+        final downloadsDir = Directory('/storage/emulated/0/Download');
+        final file = File('${downloadsDir.path}/$fileName');
+
+        await file.writeAsBytes(response.bodyBytes, flush: true);
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("✅ QR saved to Downloads folder")),
+        );
+      }
+
+      // ================= iOS =================
+      if (Platform.isIOS) {
+        final dir = await getApplicationDocumentsDirectory();
+        final file = File('${dir.path}/$fileName');
+
+        await file.writeAsBytes(response.bodyBytes, flush: true);
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("✅ QR saved in Files app")),
+        );
+      }
     } catch (e) {
-      setState(() => isDownloading = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text("❌ Failed to download QR Code")));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("❌ Failed to download QR Code")),
+      );
+    } finally {
+      if (mounted) setState(() => isDownloading = false);
     }
+  }
+
+  ImageProvider _safeImage(String url) {
+    if (url.isEmpty) {
+      return const AssetImage("assets/images/logo.png");
+    }
+    return NetworkImage(
+      url.startsWith('http') ? url : 'https://school.edusathi.in/$url',
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(
+        title: const Text(
           "School Information",
           style: TextStyle(color: Colors.white),
         ),
-        backgroundColor: Colors.deepPurple,
-        leading: BackButton(color: Colors.white),
+        backgroundColor: AppColors.primary,
+        leading: const BackButton(color: Colors.white),
       ),
-      backgroundColor: Colors.deepPurple[50],
+      backgroundColor: AppColors.primary[50],
       body: isLoading
-          ? Center(child: CircularProgressIndicator())
+          ? const Center(child: CircularProgressIndicator(color: AppColors.primary),)
           : SingleChildScrollView(
               child: Card(
-                margin: EdgeInsets.all(16),
+                margin: const EdgeInsets.all(16),
                 elevation: 8,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Padding(
-                  padding: const EdgeInsets.all(16.0),
+                  padding: const EdgeInsets.all(16),
                   child: Column(
                     children: [
-                      // 🏫 Logo & Name
                       Column(
                         children: [
-                          schoolLogo.isNotEmpty
-                              ? Image.network(schoolLogo, height: 100)
-                              : Image.asset(
-                                  "assets/images/logo.png",
-                                  height: 100,
-                                ),
-                          SizedBox(height: 10),
+                          Image(
+                            image: _safeImage(schoolLogo),
+                            height: 100,
+                            errorBuilder: (_, __, ___) => Image.asset(
+                              "assets/images/logo.png",
+                              height: 100,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
                           Text(
                             schoolName,
-                            style: TextStyle(
+                            style: const TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
-                              color: Colors.deepPurple,
+                              color: AppColors.primary,
                             ),
                           ),
                         ],
                       ),
-                      SizedBox(height: 20),
+                      const SizedBox(height: 20),
 
-                      // 🟦 Section Title
                       Container(
                         width: double.infinity,
-                        padding: EdgeInsets.symmetric(vertical: 8),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
                         decoration: BoxDecoration(
                           color: Colors.blue.shade50,
-                          border: Border(
+                          border: const Border(
                             left: BorderSide(color: Colors.blue, width: 4),
                           ),
                         ),
-                        child: Padding(
-                          padding: const EdgeInsets.only(left: 8.0),
+                        child: const Padding(
+                          padding: EdgeInsets.only(left: 8),
                           child: Text(
                             "School Details",
                             style: TextStyle(
@@ -173,52 +202,47 @@ class _SchoolInfoPageState extends State<SchoolInfoPage> {
                           ),
                         ),
                       ),
-                      SizedBox(height: 16),
+                      const SizedBox(height: 16),
 
-                      // 📝 School Info List
                       ...schoolDetails.entries.map(
-                        (entry) => Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 6.0),
+                        (e) => Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 6),
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Expanded(
                                 flex: 3,
                                 child: Text(
-                                  entry.key,
-                                  style: TextStyle(fontWeight: FontWeight.bold),
+                                  e.key,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                  ),
                                 ),
                               ),
-                              Expanded(flex: 5, child: Text(entry.value)),
+                              Expanded(flex: 5, child: Text(e.value)),
                             ],
                           ),
                         ),
                       ),
 
-                      // 🧾 QR Code Section
-                      // 🧾 QR Code Section (ONLY if valid image)
-                      if (isValidQrCode) ...[
+                      if (qrCode.isNotEmpty) ...[
                         const SizedBox(height: 20),
                         const Divider(),
                         const Text(
                           "Payment QR Code",
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
-                            color: Colors.deepPurple,
+                            color: AppColors.primary,
                             fontSize: 16,
                           ),
                         ),
                         const SizedBox(height: 10),
-
-                        Image.network(
-                          qrCode,
+                        Image(
+                          image: _safeImage(qrCode),
                           height: 150,
                           width: 150,
-                          fit: BoxFit.contain,
                         ),
-
                         const SizedBox(height: 12),
-
                         ElevatedButton.icon(
                           onPressed: isDownloading ? null : downloadQrCode,
                           icon: isDownloading
@@ -238,7 +262,7 @@ class _SchoolInfoPageState extends State<SchoolInfoPage> {
                             style: const TextStyle(color: Colors.white),
                           ),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.deepPurple,
+                            backgroundColor: AppColors.primary,
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(30),
                             ),
